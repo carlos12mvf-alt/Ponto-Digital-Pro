@@ -1,0 +1,66 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile containing role and basic info.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "employee"] },
+        "companyId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "companyId"]
+    },
+    "TimeLog": {
+      "title": "Time Log",
+      "description": "Record of a clock-in or clock-out event.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "type": { "type": "string", "enum": ["in", "out"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "location": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" },
+            "accuracy": { "type": "number" }
+          }
+        },
+        "companyId": { "type": "string" }
+      },
+      "required": ["userId", "type", "timestamp", "location", "companyId"]
+    },
+    "Invitation": {
+      "title": "Invitation",
+      "description": "Invitation for a user to join a company.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "companyId": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "employee"] },
+        "invitedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "companyId", "role", "invitedBy"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles."
+    },
+    "/timeLogs/{logId}": {
+      "schema": "TimeLog",
+      "description": "Clock-in and clock-out records."
+    },
+    "/invitations/{email}": {
+      "schema": "Invitation",
+      "description": "Company invitations indexed by email."
+    }
+  }
+}

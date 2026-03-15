@@ -1,0 +1,5 @@
+{
+  "name": "Ponto Digital Pro",
+  "description": "Sistema de batida de ponto com geolocalização em tempo real, gestão de funcionários e relatórios administrativos.",
+  "requestFramePermissions": ["geolocation"]
+}
