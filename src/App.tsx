@@ -27,7 +27,8 @@ import {
   onSnapshot,
   serverTimestamp,
   getDocFromServer,
-  deleteDoc
+  deleteDoc,
+  writeBatch
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { UserProfile, TimeLog, OperationType, UserRole } from './types';
@@ -63,7 +64,7 @@ import { ptBR } from 'date-fns/locale';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 
 // Fix Leaflet icon issue by using CDN URLs
 const markerIcon = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png';
@@ -955,6 +956,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
   
   // Filters
   const [startDate, setStartDate] = useState(format(new Date(), 'yyyy-MM-01'));
@@ -1014,8 +1016,41 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
 
     try {
       await deleteDoc(doc(db, 'timeLogs', logId));
+      setSelectedLogIds(prev => prev.filter(id => id !== logId));
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `timeLogs/${logId}`);
+    }
+  };
+
+  const handleDeleteSelectedLogs = async () => {
+    if (selectedLogIds.length === 0) return;
+    if (!confirm(`Tem certeza que deseja excluir os ${selectedLogIds.length} registros selecionados? Esta ação não pode ser desfeita.`)) {
+      return;
+    }
+
+    try {
+      const batch = writeBatch(db);
+      selectedLogIds.forEach(id => {
+        batch.delete(doc(db, 'timeLogs', id));
+      });
+      await batch.commit();
+      setSelectedLogIds([]);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'timeLogs/batch');
+    }
+  };
+
+  const toggleSelectLog = (id: string) => {
+    setSelectedLogIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = (filteredLogs: TimeLog[]) => {
+    if (selectedLogIds.length === filteredLogs.length && filteredLogs.length > 0) {
+      setSelectedLogIds([]);
+    } else {
+      setSelectedLogIds(filteredLogs.map(log => log.id!));
     }
   };
 
@@ -1024,11 +1059,16 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
     const filteredLogs = logs.filter(log => {
       if (!log.timestamp) return false;
       const date = log.timestamp.toDate();
-      return isWithinInterval(date, {
-        start: startOfDay(new Date(startDate)),
-        end: endOfDay(new Date(endDate))
-      });
+      // Use local time for date comparison
+      const start = startOfDay(new Date(startDate + 'T00:00:00'));
+      const end = endOfDay(new Date(endDate + 'T23:59:59'));
+      return isWithinInterval(date, { start, end });
     });
+
+    if (filteredLogs.length === 0) {
+      alert('Nenhum registro encontrado no período selecionado para gerar o PDF.');
+      return;
+    }
 
     // Header
     doc.setFontSize(18);
@@ -1036,7 +1076,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
     doc.setFontSize(11);
     doc.setTextColor(100);
     doc.text(`Empresa: ${profile.companyId}`, 14, 30);
-    doc.text(`Período: ${format(new Date(startDate), 'dd/MM/yyyy')} até ${format(new Date(endDate), 'dd/MM/yyyy')}`, 14, 36);
+    doc.text(`Período: ${format(new Date(startDate + 'T00:00:00'), 'dd/MM/yyyy')} até ${format(new Date(endDate + 'T00:00:00'), 'dd/MM/yyyy')}`, 14, 36);
     doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 14, 42);
 
     const tableData = filteredLogs.map(log => [
@@ -1046,7 +1086,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
       `${log.location.latitude.toFixed(4)}, ${log.location.longitude.toFixed(4)}`
     ]);
 
-    (doc as any).autoTable({
+    autoTable(doc, {
       startY: 50,
       head: [['Funcionário', 'Tipo', 'Data/Hora', 'Localização']],
       body: tableData,
@@ -1198,82 +1238,118 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50/50 border-b border-slate-100">
+                    <th className="px-6 py-4 w-10">
+                      <input 
+                        type="checkbox" 
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        checked={(() => {
+                          const filtered = logs.filter(log => {
+                            if (!log.timestamp) return true;
+                            const date = log.timestamp.toDate();
+                            const start = startOfDay(new Date(startDate + 'T00:00:00'));
+                            const end = endOfDay(new Date(endDate + 'T23:59:59'));
+                            return isWithinInterval(date, { start, end });
+                          });
+                          return filtered.length > 0 && selectedLogIds.length === filtered.length;
+                        })()}
+                        onChange={() => toggleSelectAll(logs.filter(log => {
+                          if (!log.timestamp) return true;
+                          const date = log.timestamp.toDate();
+                          const start = startOfDay(new Date(startDate + 'T00:00:00'));
+                          const end = endOfDay(new Date(endDate + 'T23:59:59'));
+                          return isWithinInterval(date, { start, end });
+                        }))}
+                      />
+                    </th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Funcionário</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Tipo</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Data/Hora</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Localização</th>
-                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Ações</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">
+                      {selectedLogIds.length > 0 ? (
+                        <button 
+                          onClick={handleDeleteSelectedLogs}
+                          className="text-rose-600 hover:text-rose-700 flex items-center gap-1 ml-auto font-bold text-[10px]"
+                        >
+                          <Trash2 size={14} /> Apagar ({selectedLogIds.length})
+                        </button>
+                      ) : 'Ações'}
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {logs.filter(log => {
-                    if (!log.timestamp) return true;
-                    const date = log.timestamp.toDate();
-                    return isWithinInterval(date, {
-                      start: startOfDay(new Date(startDate)),
-                      end: endOfDay(new Date(endDate))
+                  {(() => {
+                    const filtered = logs.filter(log => {
+                      if (!log.timestamp) return true;
+                      const date = log.timestamp.toDate();
+                      const start = startOfDay(new Date(startDate + 'T00:00:00'));
+                      const end = endOfDay(new Date(endDate + 'T23:59:59'));
+                      return isWithinInterval(date, { start, end });
                     });
-                  }).length > 0 ? logs.filter(log => {
-                    if (!log.timestamp) return true;
-                    const date = log.timestamp.toDate();
-                    return isWithinInterval(date, {
-                      start: startOfDay(new Date(startDate)),
-                      end: endOfDay(new Date(endDate))
-                    });
-                  }).map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 font-bold text-xs">
-                            {log.userName?.charAt(0)}
+                    
+                    return filtered.length > 0 ? filtered.map((log) => (
+                      <tr key={log.id} className={cn("hover:bg-slate-50/50 transition-colors", selectedLogIds.includes(log.id!) && "bg-indigo-50/30")}>
+                        <td className="px-6 py-4">
+                          <input 
+                            type="checkbox" 
+                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            checked={selectedLogIds.includes(log.id!)}
+                            onChange={() => toggleSelectLog(log.id!)}
+                          />
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 font-bold text-xs">
+                              {log.userName?.charAt(0)}
+                            </div>
+                            <span className="font-medium text-slate-900">{log.userName}</span>
                           </div>
-                          <span className="font-medium text-slate-900">{log.userName}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={cn(
-                          "px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider",
-                          log.type === 'in' ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
-                        )}>
-                          {log.type === 'in' ? 'Entrada' : 'Saída'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm">
-                          <p className="font-semibold text-slate-900">
-                            {log.timestamp ? format(log.timestamp.toDate(), 'HH:mm:ss') : '--:--:--'}
-                          </p>
-                          <p className="text-slate-400 text-xs">
-                            {log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy') : '--/--/----'}
-                          </p>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <a 
-                          href={`https://www.google.com/maps?q=${log.location.latitude},${log.location.longitude}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Ver no Mapa"
-                          className="text-indigo-600 hover:underline text-xs flex items-center gap-1"
-                        >
-                          <MapPin size={12} /> Ver Mapa
-                        </a>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <button 
-                          onClick={() => handleDeleteLog(log.id)}
-                          className="p-2 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
-                          title="Excluir Registro"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </td>
-                    </tr>
-                  )) : (
-                    <tr>
-                      <td colSpan={5} className="px-6 py-12 text-center text-slate-400">Nenhum registro encontrado para este período.</td>
-                    </tr>
-                  )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={cn(
+                            "px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider",
+                            log.type === 'in' ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
+                          )}>
+                            {log.type === 'in' ? 'Entrada' : 'Saída'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm">
+                            <p className="font-semibold text-slate-900">
+                              {log.timestamp ? format(log.timestamp.toDate(), 'HH:mm:ss') : '--:--:--'}
+                            </p>
+                            <p className="text-slate-400 text-xs">
+                              {log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy') : '--/--/----'}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <a 
+                            href={`https://www.google.com/maps?q=${log.location.latitude},${log.location.longitude}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Ver no Mapa"
+                            className="text-indigo-600 hover:underline text-xs flex items-center gap-1"
+                          >
+                            <MapPin size={12} /> Ver Mapa
+                          </a>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button 
+                            onClick={() => handleDeleteLog(log.id!)}
+                            className="p-2 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
+                            title="Excluir Registro"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400">Nenhum registro encontrado para este período.</td>
+                      </tr>
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
