@@ -1,23 +1,25 @@
 {
+  "short_name": "PontoPro",
   "name": "Ponto Digital Pro",
-  "short_name": "Ponto Pro",
-  "description": "Sistema de Gestão de Ponto Digital",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#4f46e5",
   "icons": [
     {
-      "src": "https://picsum.photos/seed/clock/192/192",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
     },
     {
-      "src": "https://picsum.photos/seed/clock/512/512",
-      "sizes": "512x512",
+      "src": "https://picsum.photos/seed/ponto/192/192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://picsum.photos/seed/ponto/512/512",
+      "type": "image/png",
+      "sizes": "512x512"
     }
-  ]
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#4f46e5",
+  "background_color": "#f8fafc"
 }

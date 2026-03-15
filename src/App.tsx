@@ -973,19 +973,6 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
     }
   };
 
-  const sendLogNotification = (log: TimeLog) => {
-    if (Notification.permission === 'granted') {
-      const title = log.type === 'in' ? 'Nova Entrada' : 'Nova Saída';
-      const body = `${log.userName} acabou de bater o ponto (${log.type === 'in' ? 'Entrada' : 'Saída'}).`;
-      
-      new Notification(title, {
-        body,
-        icon: '/favicon.ico',
-        tag: log.id // Prevent duplicate notifications for the same log
-      });
-    }
-  };
-
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
@@ -1029,21 +1016,6 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
     const unsubLogs = onSnapshot(logsQ, (snapshot) => {
       const updatedLogs = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as TimeLog));
       setLogs(updatedLogs);
-
-      // Notify about new logs
-      if (!snapshot.metadata.hasPendingWrites) {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const log = { ...change.doc.data(), id: change.doc.id } as TimeLog;
-            const logTime = log.timestamp?.toDate().getTime();
-            const now = Date.now();
-            // Only notify if log is very recent (last 30 seconds) to avoid initial load spam
-            if (logTime && (now - logTime) < 30000) {
-              sendLogNotification(log);
-            }
-          }
-        });
-      }
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'timeLogs'));
 
     // Listen for invitations
@@ -1361,8 +1333,13 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
             <div className="bg-amber-50 border border-amber-100 p-4 rounded-xl flex gap-3">
               <AlertCircle className="text-amber-600 shrink-0" size={18} />
               <div className="text-[11px] text-amber-800">
-                <p className="font-bold mb-1">Dica para Celular:</p>
-                <p>Para receber notificações mesmo com a tela bloqueada, use a opção <b>"Adicionar à Tela de Início"</b> no seu navegador e abra o app por lá.</p>
+                <p className="font-bold mb-1">Notificações em Segundo Plano:</p>
+                <p className="mb-2">Para receber alertas mesmo com o app fechado ou celular bloqueado:</p>
+                <ol className="list-decimal ml-4 space-y-1">
+                  <li>Use a opção <b>"Adicionar à Tela de Início"</b> no seu navegador.</li>
+                  <li>Abra o app pelo ícone que aparecerá na sua tela inicial.</li>
+                  <li>Mantenha o app instalado como um aplicativo (PWA).</li>
+                </ol>
               </div>
             </div>
             {notificationsEnabled && (
@@ -1526,6 +1503,65 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
   );
 };
 
+// --- Notification Handler ---
+
+const NotificationHandler = ({ profile }: { profile: UserProfile }) => {
+  useEffect(() => {
+    if (profile.role !== 'admin') return;
+
+    const sendLogNotification = async (log: TimeLog) => {
+      if (Notification.permission === 'granted') {
+        const title = log.type === 'in' ? 'Nova Entrada' : 'Nova Saída';
+        const body = `${log.userName} acabou de bater o ponto (${log.type === 'in' ? 'Entrada' : 'Saída'}).`;
+        
+        // Try to use Service Worker registration for better background support
+        if ('serviceWorker' in navigator) {
+          const registration = await navigator.serviceWorker.ready;
+          registration.showNotification(title, {
+            body,
+            icon: '/favicon.ico',
+            badge: '/favicon.ico',
+            tag: log.id,
+            vibrate: [200, 100, 200]
+          } as any);
+        } else {
+          // Fallback to standard Notification
+          new Notification(title, {
+            body,
+            icon: '/favicon.ico',
+            tag: log.id
+          });
+        }
+      }
+    };
+
+    const logsQ = query(
+      collection(db, 'timeLogs'),
+      where('companyId', '==', profile.companyId),
+      orderBy('timestamp', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(logsQ, (snapshot) => {
+      if (!snapshot.metadata.hasPendingWrites) {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            const log = { ...change.doc.data(), id: change.doc.id } as TimeLog;
+            const logTime = log.timestamp?.toDate().getTime();
+            const now = Date.now();
+            if (logTime && (now - logTime) < 30000) {
+              sendLogNotification(log);
+            }
+          }
+        });
+      }
+    }, (error) => console.error('Notification listener error:', error));
+
+    return () => unsubscribe();
+  }, [profile]);
+
+  return null;
+};
+
 // --- Main App ---
 
 export default function App() {
@@ -1584,6 +1620,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      {profile && <NotificationHandler profile={profile} />}
       <Router>
         <Routes>
           <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
