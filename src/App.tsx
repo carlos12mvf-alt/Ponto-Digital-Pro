@@ -50,7 +50,9 @@ import {
   Copy,
   Trash2,
   MessageCircle,
-  Globe
+  Globe,
+  Bell,
+  BellOff
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -946,6 +948,43 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   const [activeTab, setActiveTab] = useState<'users' | 'logs' | 'map' | 'settings'>('logs');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+
+  useEffect(() => {
+    if ('Notification' in window) {
+      setNotificationsEnabled(Notification.permission === 'granted');
+    }
+  }, []);
+
+  const requestNotificationPermission = async () => {
+    if (!('Notification' in window)) {
+      alert('Este navegador não suporta notificações.');
+      return;
+    }
+
+    const permission = await Notification.requestPermission();
+    setNotificationsEnabled(permission === 'granted');
+    
+    if (permission === 'granted') {
+      new Notification('Notificações Ativadas', {
+        body: 'Você receberá alertas quando funcionários baterem o ponto.',
+        icon: '/favicon.ico'
+      });
+    }
+  };
+
+  const sendLogNotification = (log: TimeLog) => {
+    if (Notification.permission === 'granted') {
+      const title = log.type === 'in' ? 'Nova Entrada' : 'Nova Saída';
+      const body = `${log.userName} acabou de bater o ponto (${log.type === 'in' ? 'Entrada' : 'Saída'}).`;
+      
+      new Notification(title, {
+        body,
+        icon: '/favicon.ico',
+        tag: log.id // Prevent duplicate notifications for the same log
+      });
+    }
+  };
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -988,7 +1027,23 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
       orderBy('timestamp', 'desc')
     );
     const unsubLogs = onSnapshot(logsQ, (snapshot) => {
-      setLogs(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as TimeLog)));
+      const updatedLogs = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as TimeLog));
+      setLogs(updatedLogs);
+
+      // Notify about new logs
+      if (!snapshot.metadata.hasPendingWrites) {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            const log = { ...change.doc.data(), id: change.doc.id } as TimeLog;
+            const logTime = log.timestamp?.toDate().getTime();
+            const now = Date.now();
+            // Only notify if log is very recent (last 30 seconds) to avoid initial load spam
+            if (logTime && (now - logTime) < 30000) {
+              sendLogNotification(log);
+            }
+          }
+        });
+      }
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'timeLogs'));
 
     // Listen for invitations
@@ -1277,6 +1332,47 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
           <div>
             <h3 className="text-lg font-bold text-slate-900 mb-2">Configurações do Sistema</h3>
             <p className="text-slate-500 text-sm">Gerencie o acesso e os links de convite da sua empresa.</p>
+          </div>
+
+          <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                <Bell size={18} className="text-indigo-600" /> Notificações em Tempo Real
+              </h4>
+              <button 
+                onClick={requestNotificationPermission}
+                className={cn(
+                  "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2",
+                  notificationsEnabled 
+                    ? "bg-emerald-100 text-emerald-700 border border-emerald-200" 
+                    : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-100"
+                )}
+              >
+                {notificationsEnabled ? (
+                  <><CheckCircle2 size={14} /> Ativadas</>
+                ) : (
+                  <><Bell size={14} /> Ativar Notificações</>
+                )}
+              </button>
+            </div>
+            <p className="text-sm text-slate-600">
+              Ative as notificações para receber alertas no seu celular ou computador sempre que um funcionário registrar entrada ou saída.
+            </p>
+            <div className="bg-amber-50 border border-amber-100 p-4 rounded-xl flex gap-3">
+              <AlertCircle className="text-amber-600 shrink-0" size={18} />
+              <div className="text-[11px] text-amber-800">
+                <p className="font-bold mb-1">Dica para Celular:</p>
+                <p>Para receber notificações mesmo com a tela bloqueada, use a opção <b>"Adicionar à Tela de Início"</b> no seu navegador e abra o app por lá.</p>
+              </div>
+            </div>
+            {notificationsEnabled && (
+              <div className="p-3 bg-white border border-slate-200 rounded-xl flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                  <Bell size={16} />
+                </div>
+                <p className="text-xs text-slate-500">As notificações estão configuradas para este navegador.</p>
+              </div>
+            )}
           </div>
 
           <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
