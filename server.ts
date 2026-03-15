@@ -30,7 +30,12 @@ async function startServer() {
     const resendClient = new Resend(process.env.RESEND_API_KEY);
 
     const host = req.get('origin') || req.get('referer') || process.env.APP_URL || 'http://localhost:3000';
-    const inviteLink = host.endsWith('/') ? `${host}register` : `${host}/register`;
+    // Auto-convert dev URL to shared URL to avoid 403 errors for employees
+    let publicHost = host;
+    if (host.includes('ais-dev-')) {
+      publicHost = host.replace('ais-dev-', 'ais-pre-');
+    }
+    const inviteLink = publicHost.endsWith('/') ? `${publicHost}register` : `${publicHost}/register`;
 
     try {
       const { data, error } = await resendClient.emails.send({

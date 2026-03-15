@@ -459,7 +459,15 @@ const AddEmployeeModal = ({ isOpen, onClose, adminProfile }: { isOpen: boolean, 
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
 
-  const inviteLink = `${window.location.origin}/register`;
+  const getInviteLink = () => {
+    const origin = window.location.origin;
+    if (origin.includes('ais-dev-')) {
+      return `${origin.replace('ais-dev-', 'ais-pre-')}/register`;
+    }
+    return `${origin}/register`;
+  };
+
+  const inviteLink = getInviteLink();
 
   const copyToClipboard = async () => {
     try {
