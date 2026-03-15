@@ -47,6 +47,47 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["email", "companyId", "role", "invitedBy"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Construction project or work site.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "companyId": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "completed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "companyId", "status"]
+    },
+    "ProjectStage": {
+      "title": "Project Stage",
+      "description": "A specific task or stage within a project.",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "completed": { "type": "boolean" },
+        "completedBy": { "type": "string" },
+        "completedByName": { "type": "string" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "companyId": { "type": "string" }
+      },
+      "required": ["projectId", "title", "completed", "companyId"]
+    },
+    "CompanySettings": {
+      "title": "Company Settings",
+      "description": "Global settings for the company, like checkout reminders.",
+      "type": "object",
+      "properties": {
+        "checkoutReminders": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["checkoutReminders"]
     }
   },
   "firestore": {
@@ -61,6 +102,18 @@
     "/invitations/{email}": {
       "schema": "Invitation",
       "description": "Company invitations indexed by email."
+    },
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Company projects."
+    },
+    "/projectStages/{stageId}": {
+      "schema": "ProjectStage",
+      "description": "Stages for projects."
+    },
+    "/companySettings/{companyId}": {
+      "schema": "CompanySettings",
+      "description": "Global settings for the company."
     }
   }
 }

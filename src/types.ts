@@ -31,6 +31,32 @@ export interface TimeLog {
   companyId: string;
 }
 
+export interface Project {
+  id?: string;
+  name: string;
+  description?: string;
+  companyId: string;
+  status: 'active' | 'completed';
+  createdAt: any;
+}
+
+export interface ProjectStage {
+  id?: string;
+  projectId: string;
+  title: string;
+  description?: string;
+  completed: boolean;
+  completedBy?: string;
+  completedByName?: string;
+  completedAt?: any;
+  companyId: string;
+}
+
+export interface CompanySettings {
+  id: string; // companyId
+  checkoutReminders: string[];
+}
+
 export enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',

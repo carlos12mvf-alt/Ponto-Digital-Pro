@@ -34,6 +34,32 @@ service cloud.firestore {
     //   - invitedBy: string (uid)
     //   - createdAt: timestamp
     //
+    // Collection: projects
+    // Document ID: auto-generated
+    // Fields:
+    //   - name: string (required)
+    //   - description: string
+    //   - companyId: string (required)
+    //   - status: string (active | completed)
+    //   - createdAt: timestamp
+    //
+    // Collection: projectStages
+    // Document ID: auto-generated
+    // Fields:
+    //   - projectId: string (required)
+    //   - title: string (required)
+    //   - description: string
+    //   - completed: boolean (required)
+    //   - completedBy: string
+    //   - completedByName: string
+    //   - completedAt: timestamp
+    //   - companyId: string (required)
+    //
+    // Collection: companySettings
+    // Document ID: companyId
+    // Fields:
+    //   - checkoutReminders: list of strings (required)
+    //
     // ===============================================================
 
     // Helper Functions
@@ -83,6 +109,27 @@ service cloud.firestore {
              data.invitedBy == request.auth.uid;
     }
 
+    function isValidProject(data) {
+      return data.keys().hasAll(['name', 'companyId', 'status']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.companyId is string &&
+             data.status in ['active', 'completed'];
+    }
+
+    function isValidProjectStage(data) {
+      return data.keys().hasAll(['projectId', 'title', 'completed', 'companyId']) &&
+             data.projectId is string &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.completed is bool &&
+             data.companyId is string;
+    }
+
+    function isValidCompanySettings(data) {
+      return data.keys().hasAll(['checkoutReminders']) &&
+             data.checkoutReminders is list &&
+             data.checkoutReminders.size() < 20;
+    }
+
     // Rules
     match /users/{userId} {
       allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
@@ -109,6 +156,25 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if isAdmin() && isValidInvitation(request.resource.data);
       allow delete: if isAdmin();
+    }
+
+    match /projects/{projectId} {
+      allow read: if isAuthenticated() && getUserData().companyId == resource.data.companyId;
+      allow create, update, delete: if isAdmin() && isValidProject(request.resource.data) && 
+                                    request.resource.data.companyId == getUserData().companyId;
+    }
+
+    match /projectStages/{stageId} {
+      allow read: if isAuthenticated() && getUserData().companyId == resource.data.companyId;
+      allow create, delete: if isAdmin() && isValidProjectStage(request.resource.data) && 
+                            request.resource.data.companyId == getUserData().companyId;
+      allow update: if isAuthenticated() && getUserData().companyId == resource.data.companyId && 
+                    isValidProjectStage(request.resource.data);
+    }
+
+    match /companySettings/{companyId} {
+      allow read: if isAuthenticated() && getUserData().companyId == companyId;
+      allow create, update: if isAdmin() && companyId == getUserData().companyId && isValidCompanySettings(request.resource.data);
     }
   }
 }
