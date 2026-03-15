@@ -49,7 +49,8 @@ import {
   Shield,
   Copy,
   Trash2,
-  MessageCircle
+  MessageCircle,
+  Globe
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -941,7 +942,7 @@ const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
 const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [logs, setLogs] = useState<TimeLog[]>([]);
-  const [activeTab, setActiveTab] = useState<'users' | 'logs' | 'map'>('logs');
+  const [activeTab, setActiveTab] = useState<'users' | 'logs' | 'map' | 'settings'>('logs');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -1040,6 +1041,15 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
           >
             Funcionários
           </button>
+          <button 
+            onClick={() => setActiveTab('settings')}
+            className={cn(
+              "px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap",
+              activeTab === 'settings' ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" : "text-slate-500 hover:text-slate-700"
+            )}
+          >
+            Configurações
+          </button>
         </div>
       </div>
 
@@ -1131,53 +1141,80 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
         </div>
       )}
 
-      {activeTab === 'users' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {users.map((u) => (
-            <div key={u.uid} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col">
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-lg">
-                    {u.displayName?.charAt(0)}
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-slate-900 leading-none">{u.displayName}</h4>
-                    <p className="text-sm text-slate-500 mt-1">{u.email}</p>
-                  </div>
-                </div>
-                {u.uid !== profile.uid && (
-                  <button 
-                    onClick={() => handleDeleteUser(u.uid, u.email)}
-                    className="p-2 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
-                    title="Excluir Funcionário"
+      {activeTab === 'settings' && (
+        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 space-y-8">
+          <div>
+            <h3 className="text-lg font-bold text-slate-900 mb-2">Configurações do Sistema</h3>
+            <p className="text-slate-500 text-sm">Gerencie o acesso e os links de convite da sua empresa.</p>
+          </div>
+
+          <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                <Globe size={18} className="text-indigo-600" /> Link Público de Cadastro
+              </h4>
+              {window.location.origin.includes('ais-dev-') ? (
+                <span className="px-2 py-1 bg-amber-100 text-amber-700 text-[10px] font-bold rounded uppercase">Ambiente de Teste</span>
+              ) : (
+                <span className="px-2 py-1 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded uppercase">Ambiente Público</span>
+              )}
+            </div>
+            
+            <p className="text-sm text-slate-600">
+              Este é o link que seus funcionários devem usar para se cadastrar. Se eles virem um erro "403", certifique-se de que estão usando o link que começa com <code className="bg-slate-200 px-1 rounded">ais-pre-</code>.
+            </p>
+
+            <div className="flex items-center gap-2">
+              <input 
+                type="text" 
+                readOnly 
+                value={`${window.location.origin.includes('ais-dev-') ? window.location.origin.replace('ais-dev-', 'ais-pre-') : window.location.origin}/register`}
+                className="flex-1 bg-white border border-slate-200 px-4 py-3 rounded-xl text-sm font-mono text-slate-500 outline-none"
+              />
+              <button 
+                onClick={() => {
+                  const link = `${window.location.origin.includes('ais-dev-') ? window.location.origin.replace('ais-dev-', 'ais-pre-') : window.location.origin}/register`;
+                  navigator.clipboard.writeText(link);
+                  alert('Link copiado com sucesso!');
+                }}
+                className="p-3 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-all"
+                title="Copiar Link"
+              >
+                <Copy size={20} />
+              </button>
+            </div>
+
+            {window.location.origin.includes('ais-dev-') && (
+              <div className="mt-4 p-4 bg-amber-50 border border-amber-100 rounded-xl flex gap-3">
+                <AlertCircle className="text-amber-600 shrink-0" size={20} />
+                <div className="text-xs text-amber-800 space-y-2">
+                  <p className="font-bold">Atenção: Você está no ambiente de desenvolvimento.</p>
+                  <p>Para evitar erros 403 para seus funcionários, sempre use o link acima ou acesse o sistema através da URL de compartilhamento (Shared App URL).</p>
+                  <a 
+                    href={window.location.origin.replace('ais-dev-', 'ais-pre-')} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="inline-block font-bold underline hover:text-amber-900"
                   >
-                    <Trash2 size={18} />
-                  </button>
-                )}
+                    Abrir Versão Pública do Sistema
+                  </a>
+                </div>
               </div>
-              
-              <div className="mt-auto pt-4 border-t border-slate-50 flex items-center justify-between">
-                <span className={cn(
-                  "px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wider",
-                  u.role === 'admin' ? "bg-indigo-50 text-indigo-600" : "bg-slate-50 text-slate-600"
-                )}>
-                  {u.role === 'admin' ? 'Admin' : 'Funcionário'}
-                </span>
-                <p className="text-[10px] text-slate-400">Desde {u.createdAt ? format(u.createdAt.toDate(), 'MM/yyyy') : '---'}</p>
+            )}
+          </div>
+
+          <div className="pt-6 border-t border-slate-100">
+            <h4 className="font-bold text-slate-800 mb-4">Informações da Empresa</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-4 bg-slate-50 rounded-xl">
+                <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">Nome da Empresa</p>
+                <p className="font-semibold text-slate-700">{profile.companyId}</p>
+              </div>
+              <div className="p-4 bg-slate-50 rounded-xl">
+                <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">Seu ID de Administrador</p>
+                <p className="font-mono text-xs text-slate-500">{profile.uid}</p>
               </div>
             </div>
-          ))}
-          
-          {/* Add User Placeholder */}
-          <div 
-            onClick={() => setIsAddModalOpen(true)}
-            className="bg-slate-50 p-6 rounded-3xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center text-center group hover:border-indigo-300 transition-all cursor-pointer"
-          >
-            <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-slate-400 group-hover:text-indigo-600 transition-colors mb-3">
-              <Plus size={24} />
-            </div>
-            <p className="text-sm font-bold text-slate-500 group-hover:text-indigo-600">Novo Funcionário</p>
-            <p className="text-xs text-slate-400 mt-1">Vincular por e-mail</p>
           </div>
         </div>
       )}
