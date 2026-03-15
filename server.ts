@@ -29,6 +29,9 @@ async function startServer() {
 
     const resendClient = new Resend(process.env.RESEND_API_KEY);
 
+    const host = req.get('origin') || req.get('referer') || process.env.APP_URL || 'http://localhost:3000';
+    const inviteLink = host.endsWith('/') ? `${host}register` : `${host}/register`;
+
     try {
       const { data, error } = await resendClient.emails.send({
         from: 'Ponto Digital Pro <onboarding@resend.dev>',
@@ -44,7 +47,7 @@ async function startServer() {
               Para começar a registrar seu ponto, basta criar sua conta usando este e-mail através do link abaixo:
             </p>
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${process.env.APP_URL || 'http://localhost:3000'}/register" 
+              <a href="${inviteLink}" 
                  style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
                 Criar Minha Conta
               </a>

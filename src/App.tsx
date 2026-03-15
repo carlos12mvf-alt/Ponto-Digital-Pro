@@ -455,6 +455,7 @@ const ForgotPassword = () => {
 
 const AddEmployeeModal = ({ isOpen, onClose, adminProfile }: { isOpen: boolean, onClose: () => void, adminProfile: UserProfile }) => {
   const [email, setEmail] = useState('');
+  const [role, setRole] = useState<UserRole>('employee');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
 
@@ -480,12 +481,12 @@ const AddEmployeeModal = ({ isOpen, onClose, adminProfile }: { isOpen: boolean, 
       await setDoc(doc(db, 'invitations', email.toLowerCase()), {
         email: email.toLowerCase(),
         companyId: adminProfile.companyId,
-        role: 'employee',
+        role: role,
         invitedBy: adminProfile.uid,
         createdAt: serverTimestamp()
       });
 
-      setStatus({ type: 'success', msg: 'Funcionário vinculado com sucesso! Agora envie o link de cadastro.' });
+      setStatus({ type: 'success', msg: 'Convite criado com sucesso! Agora compartilhe o link de cadastro.' });
       setEmail('');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'invitations');
@@ -523,6 +524,18 @@ const AddEmployeeModal = ({ isOpen, onClose, adminProfile }: { isOpen: boolean, 
               className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
               placeholder="funcionario@empresa.com"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Cargo / Permissão</label>
+            <select 
+              value={role}
+              onChange={(e) => setRole(e.target.value as UserRole)}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+            >
+              <option value="employee">Funcionário (Apenas bater ponto)</option>
+              <option value="admin">Administrador (Gestão total)</option>
+            </select>
           </div>
 
           {status && (
