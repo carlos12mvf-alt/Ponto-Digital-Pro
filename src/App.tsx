@@ -52,12 +52,18 @@ import {
   MessageCircle,
   Globe,
   Bell,
-  BellOff
+  BellOff,
+  FileText,
+  Download,
+  Calendar,
+  Filter
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
+import { jsPDF } from 'jspdf';
+import 'jspdf-autotable';
 
 // Fix Leaflet icon issue by using CDN URLs
 const markerIcon = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png';
@@ -949,6 +955,10 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  
+  // Filters
+  const [startDate, setStartDate] = useState(format(new Date(), 'yyyy-MM-01'));
+  const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
 
   useEffect(() => {
     if ('Notification' in window) {
@@ -995,6 +1005,56 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `users/${userId}`);
     }
+  };
+
+  const handleDeleteLog = async (logId: string) => {
+    if (!confirm('Tem certeza que deseja excluir este registro de ponto? Esta ação não pode ser desfeita.')) {
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, 'timeLogs', logId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `timeLogs/${logId}`);
+    }
+  };
+
+  const generatePDF = () => {
+    const doc = new jsPDF();
+    const filteredLogs = logs.filter(log => {
+      if (!log.timestamp) return false;
+      const date = log.timestamp.toDate();
+      return isWithinInterval(date, {
+        start: startOfDay(new Date(startDate)),
+        end: endOfDay(new Date(endDate))
+      });
+    });
+
+    // Header
+    doc.setFontSize(18);
+    doc.text('Relatório de Ponto Digital', 14, 22);
+    doc.setFontSize(11);
+    doc.setTextColor(100);
+    doc.text(`Empresa: ${profile.companyId}`, 14, 30);
+    doc.text(`Período: ${format(new Date(startDate), 'dd/MM/yyyy')} até ${format(new Date(endDate), 'dd/MM/yyyy')}`, 14, 36);
+    doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 14, 42);
+
+    const tableData = filteredLogs.map(log => [
+      log.userName,
+      log.type === 'in' ? 'Entrada' : 'Saída',
+      log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy HH:mm:ss') : '---',
+      `${log.location.latitude.toFixed(4)}, ${log.location.longitude.toFixed(4)}`
+    ]);
+
+    (doc as any).autoTable({
+      startY: 50,
+      head: [['Funcionário', 'Tipo', 'Data/Hora', 'Localização']],
+      body: tableData,
+      theme: 'striped',
+      headStyles: { fillColor: [79, 70, 229] },
+    });
+
+    doc.save(`relatorio_ponto_${startDate}_${endDate}.pdf`);
   };
 
   useEffect(() => {
@@ -1101,65 +1161,122 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
       </div>
 
       {activeTab === 'logs' && (
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 border-b border-slate-100">
-                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Funcionário</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Tipo</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Data/Hora</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Localização</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {logs.length > 0 ? logs.map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 font-bold text-xs">
-                          {log.userName?.charAt(0)}
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col md:flex-row md:items-end gap-4">
+            <div className="flex-1 space-y-2">
+              <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-2">
+                <Calendar size={14} /> Data Inicial
+              </label>
+              <input 
+                type="date" 
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              />
+            </div>
+            <div className="flex-1 space-y-2">
+              <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-2">
+                <Calendar size={14} /> Data Final
+              </label>
+              <input 
+                type="date" 
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              />
+            </div>
+            <button 
+              onClick={generatePDF}
+              className="px-6 py-2 bg-emerald-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 h-[42px]"
+            >
+              <Download size={18} /> Gerar PDF
+            </button>
+          </div>
+
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50/50 border-b border-slate-100">
+                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Funcionário</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Tipo</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Data/Hora</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Localização</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {logs.filter(log => {
+                    if (!log.timestamp) return true;
+                    const date = log.timestamp.toDate();
+                    return isWithinInterval(date, {
+                      start: startOfDay(new Date(startDate)),
+                      end: endOfDay(new Date(endDate))
+                    });
+                  }).length > 0 ? logs.filter(log => {
+                    if (!log.timestamp) return true;
+                    const date = log.timestamp.toDate();
+                    return isWithinInterval(date, {
+                      start: startOfDay(new Date(startDate)),
+                      end: endOfDay(new Date(endDate))
+                    });
+                  }).map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 font-bold text-xs">
+                            {log.userName?.charAt(0)}
+                          </div>
+                          <span className="font-medium text-slate-900">{log.userName}</span>
                         </div>
-                        <span className="font-medium text-slate-900">{log.userName}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={cn(
-                        "px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider",
-                        log.type === 'in' ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
-                      )}>
-                        {log.type === 'in' ? 'Entrada' : 'Saída'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm">
-                        <p className="font-semibold text-slate-900">
-                          {log.timestamp ? format(log.timestamp.toDate(), 'HH:mm:ss') : '--:--:--'}
-                        </p>
-                        <p className="text-slate-400 text-xs">
-                          {log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy') : '--/--/----'}
-                        </p>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <a 
-                        href={`https://www.google.com/maps?q=${log.location.latitude},${log.location.longitude}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="Ver no Mapa"
-                        className="text-indigo-600 hover:underline text-xs flex items-center gap-1"
-                      >
-                        <MapPin size={14} /> Ver no Mapa
-                      </a>
-                    </td>
-                  </tr>
-                )) : (
-                  <tr>
-                    <td colSpan={4} className="px-6 py-12 text-center text-slate-400">Nenhum registro encontrado.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={cn(
+                          "px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider",
+                          log.type === 'in' ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
+                        )}>
+                          {log.type === 'in' ? 'Entrada' : 'Saída'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm">
+                          <p className="font-semibold text-slate-900">
+                            {log.timestamp ? format(log.timestamp.toDate(), 'HH:mm:ss') : '--:--:--'}
+                          </p>
+                          <p className="text-slate-400 text-xs">
+                            {log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy') : '--/--/----'}
+                          </p>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <a 
+                          href={`https://www.google.com/maps?q=${log.location.latitude},${log.location.longitude}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Ver no Mapa"
+                          className="text-indigo-600 hover:underline text-xs flex items-center gap-1"
+                        >
+                          <MapPin size={12} /> Ver Mapa
+                        </a>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button 
+                          onClick={() => handleDeleteLog(log.id)}
+                          className="p-2 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
+                          title="Excluir Registro"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-12 text-center text-slate-400">Nenhum registro encontrado para este período.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
