@@ -92,6 +92,7 @@ service cloud.firestore {
         (isOwner(userId) && request.resource.data.role == resource.data.role && request.resource.data.companyId == resource.data.companyId) || 
         isAdmin()
       ) && isValidUser(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     match /timeLogs/{logId} {
@@ -105,7 +106,7 @@ service cloud.firestore {
     }
 
     match /invitations/{email} {
-      allow read: if isAuthenticated() && (request.auth.token.email == email || isAdmin());
+      allow read: if true;
       allow create, update: if isAdmin() && isValidInvitation(request.resource.data);
       allow delete: if isAdmin();
     }

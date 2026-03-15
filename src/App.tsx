@@ -26,7 +26,8 @@ import {
   orderBy, 
   onSnapshot,
   serverTimestamp,
-  getDocFromServer
+  getDocFromServer,
+  deleteDoc
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { UserProfile, TimeLog, OperationType } from './types';
@@ -45,7 +46,10 @@ import {
   Menu,
   X,
   Plus,
-  Shield
+  Shield,
+  Copy,
+  Trash2,
+  MessageCircle
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -454,6 +458,18 @@ const AddEmployeeModal = ({ isOpen, onClose, adminProfile }: { isOpen: boolean, 
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
 
+  const inviteLink = `${window.location.origin}/register`;
+
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      setStatus({ type: 'success', msg: 'Link de convite copiado!' });
+      setTimeout(() => setStatus(null), 3000);
+    } catch (err) {
+      setStatus({ type: 'error', msg: 'Erro ao copiar link.' });
+    }
+  };
+
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -469,36 +485,18 @@ const AddEmployeeModal = ({ isOpen, onClose, adminProfile }: { isOpen: boolean, 
         createdAt: serverTimestamp()
       });
 
-      // 2. Call backend to send email
-      const response = await fetch('/api/send-invitation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: email.toLowerCase(),
-          companyName: 'Sua Empresa', // Ideally this would be in the profile
-          adminName: adminProfile.displayName
-        })
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || 'Falha ao enviar convite por e-mail.');
-      }
-
-      if (result.warning) {
-        setStatus({ type: 'success', msg: result.warning });
-      } else {
-        setStatus({ type: 'success', msg: 'Convite enviado e e-mail disparado com sucesso!' });
-      }
-      
+      setStatus({ type: 'success', msg: 'Funcionário vinculado com sucesso! Agora envie o link de cadastro.' });
       setEmail('');
-      setTimeout(onClose, 3000);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'invitations');
     } finally {
       setLoading(false);
     }
+  };
+
+  const shareWhatsApp = () => {
+    const text = `Olá! Você foi convidado para o Ponto Digital Pro. Cadastre-se usando este link: ${inviteLink}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
   };
 
   if (!isOpen) return null;
@@ -544,6 +542,31 @@ const AddEmployeeModal = ({ isOpen, onClose, adminProfile }: { isOpen: boolean, 
           >
             {loading ? 'Processando...' : 'Vincular Funcionário'}
           </button>
+
+          <div className="relative py-4">
+            <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-100"></span></div>
+            <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-slate-400">Compartilhar Link</span></div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <button 
+              type="button"
+              onClick={copyToClipboard}
+              className="py-3 border border-slate-200 text-slate-600 rounded-xl font-semibold hover:bg-slate-50 transition-all flex items-center justify-center gap-2 text-sm"
+            >
+              <Copy size={18} /> Copiar
+            </button>
+            <button 
+              type="button"
+              onClick={shareWhatsApp}
+              className="py-3 bg-[#25D366] text-white rounded-xl font-semibold hover:bg-[#128C7E] transition-all flex items-center justify-center gap-2 text-sm"
+            >
+              <MessageCircle size={18} /> WhatsApp
+            </button>
+          </div>
+          <p className="text-[10px] text-slate-400 text-center mt-4">
+            O funcionário deve usar o e-mail informado acima no momento do cadastro.
+          </p>
         </form>
       </div>
     </div>
@@ -575,7 +598,9 @@ const Layout = ({ user, profile, children }: { user: FirebaseUser, profile: User
 
           <div className="flex items-center gap-4">
             <div className="hidden md:flex items-center gap-6 mr-6">
-              <Link to="/" title="Início" className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Início</Link>
+              {profile.role !== 'admin' && (
+                <Link to="/" title="Início" className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Início</Link>
+              )}
               {profile.role === 'admin' && (
                 <Link to="/admin" title="Painel Admin" className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Administração</Link>
               )}
@@ -607,17 +632,21 @@ const Layout = ({ user, profile, children }: { user: FirebaseUser, profile: User
               <button onClick={() => setIsMenuOpen(false)} className="text-slate-400"><X size={24} /></button>
             </div>
             <nav className="flex flex-col gap-4 flex-1">
-              <Link to="/" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 text-slate-700 font-medium">
-                <Clock size={20} /> Início
-              </Link>
+              {profile.role !== 'admin' && (
+                <>
+                  <Link to="/" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 text-slate-700 font-medium">
+                    <Clock size={20} /> Início
+                  </Link>
+                  <Link to="/history" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 text-slate-700 font-medium">
+                    <History size={20} /> Meu Histórico
+                  </Link>
+                </>
+              )}
               {profile.role === 'admin' && (
                 <Link to="/admin" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 text-slate-700 font-medium">
                   <Shield size={20} /> Administração
                 </Link>
               )}
-              <Link to="/history" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 text-slate-700 font-medium">
-                <History size={20} /> Meu Histórico
-              </Link>
             </nav>
             <button 
               onClick={handleLogout}
@@ -759,32 +788,34 @@ const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
               </h2>
               <p className="text-slate-400 mb-8">{format(currentTime, "EEEE, d 'de' MMMM", { locale: ptBR })}</p>
               
-              <div className="flex flex-col sm:flex-row gap-4 w-full max-w-md mx-auto md:mx-0">
-                <button 
-                  onClick={() => handleClockAction('in')}
-                  disabled={loading || isClockedIn}
-                  className={cn(
-                    "flex-1 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg",
-                    isClockedIn 
-                      ? "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none" 
-                      : "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100"
-                  )}
-                >
-                  <Plus size={20} /> Entrada
-                </button>
-                <button 
-                  onClick={() => handleClockAction('out')}
-                  disabled={loading || !isClockedIn}
-                  className={cn(
-                    "flex-1 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg",
-                    !isClockedIn 
-                      ? "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none" 
-                      : "bg-rose-600 text-white hover:bg-rose-700 shadow-rose-100"
-                  )}
-                >
-                  <LogOut size={20} /> Saída
-                </button>
-              </div>
+              {profile.role !== 'admin' && (
+                <div className="flex flex-col sm:flex-row gap-4 w-full max-w-md mx-auto md:mx-0">
+                  <button 
+                    onClick={() => handleClockAction('in')}
+                    disabled={loading || isClockedIn}
+                    className={cn(
+                      "flex-1 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg",
+                      isClockedIn 
+                        ? "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none" 
+                        : "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100"
+                    )}
+                  >
+                    <Plus size={20} /> Entrada
+                  </button>
+                  <button 
+                    onClick={() => handleClockAction('out')}
+                    disabled={loading || !isClockedIn}
+                    className={cn(
+                      "flex-1 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg",
+                      !isClockedIn 
+                        ? "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none" 
+                        : "bg-rose-600 text-white hover:bg-rose-700 shadow-rose-100"
+                    )}
+                  >
+                    <LogOut size={20} /> Saída
+                  </button>
+                </div>
+              )}
 
               {status && (
                 <div className={cn(
@@ -891,6 +922,31 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   const [logs, setLogs] = useState<TimeLog[]>([]);
   const [activeTab, setActiveTab] = useState<'users' | 'logs' | 'map'>('logs');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleDeleteUser = async (userId: string, userEmail: string) => {
+    if (userId === profile.uid) {
+      alert('Você não pode excluir sua própria conta de administrador.');
+      return;
+    }
+
+    if (!confirm(`Tem certeza que deseja excluir o funcionário ${userEmail}? Ele perderá acesso ao sistema.`)) {
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, 'users', userId));
+      // Also delete invitation if it exists
+      await deleteDoc(doc(db, 'invitations', userEmail.toLowerCase()));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `users/${userId}`);
+    }
+  };
 
   useEffect(() => {
     // Listen for all users in company
@@ -921,9 +977,18 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-900">Painel Administrativo</h2>
-          <p className="text-slate-500">Gerencie sua equipe e registros de ponto</p>
+        <div className="flex items-center gap-6">
+          <div>
+            <h2 className="text-2xl font-bold text-slate-900">Painel Administrativo</h2>
+            <p className="text-slate-500">Gerencie sua equipe e registros de ponto</p>
+          </div>
+          <div className="hidden lg:block h-10 w-px bg-slate-200"></div>
+          <div className="hidden lg:block">
+            <p className="text-2xl font-black text-indigo-600 tabular-nums">
+              {format(currentTime, 'HH:mm:ss')}
+            </p>
+            <p className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Horário de Brasília</p>
+          </div>
         </div>
         
         <div className="flex bg-white p-1 rounded-xl border border-slate-100 shadow-sm overflow-x-auto">
@@ -1049,14 +1114,25 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {users.map((u) => (
             <div key={u.uid} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col">
-              <div className="flex items-center gap-4 mb-6">
-                <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-lg">
-                  {u.displayName?.charAt(0)}
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-lg">
+                    {u.displayName?.charAt(0)}
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-900 leading-none">{u.displayName}</h4>
+                    <p className="text-sm text-slate-500 mt-1">{u.email}</p>
+                  </div>
                 </div>
-                <div>
-                  <h4 className="font-bold text-slate-900 leading-none">{u.displayName}</h4>
-                  <p className="text-sm text-slate-500 mt-1">{u.email}</p>
-                </div>
+                {u.uid !== profile.uid && (
+                  <button 
+                    onClick={() => handleDeleteUser(u.uid, u.email)}
+                    className="p-2 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
+                    title="Excluir Funcionário"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                )}
               </div>
               
               <div className="mt-auto pt-4 border-t border-slate-50 flex items-center justify-between">
@@ -1233,9 +1309,13 @@ export default function App() {
             path="/" 
             element={
               user && profile ? (
-                <Layout user={user} profile={profile}>
-                  <EmployeeDashboard profile={profile} />
-                </Layout>
+                profile.role === 'admin' ? (
+                  <Navigate to="/admin" />
+                ) : (
+                  <Layout user={user} profile={profile}>
+                    <EmployeeDashboard profile={profile} />
+                  </Layout>
+                )
               ) : (
                 <Navigate to="/login" />
               )
