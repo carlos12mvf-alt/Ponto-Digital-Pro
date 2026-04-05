@@ -10,6 +10,7 @@
         "displayName": { "type": "string" },
         "role": { "type": "string", "enum": ["admin", "employee"] },
         "companyId": { "type": "string" },
+        "standardWorkHours": { "type": "number", "description": "Standard work hours per day for this user." },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "email", "role", "companyId"]
@@ -23,6 +24,8 @@
         "userName": { "type": "string" },
         "type": { "type": "string", "enum": ["in", "out"] },
         "timestamp": { "type": "string", "format": "date-time" },
+        "isManual": { "type": "boolean" },
+        "addedBy": { "type": "string" },
         "location": {
           "type": "object",
           "properties": {
@@ -82,12 +85,13 @@
       "description": "Global settings for the company, like checkout reminders.",
       "type": "object",
       "properties": {
+        "standardWorkHours": { "type": "number", "description": "Default standard work hours per day for the company." },
         "checkoutReminders": {
           "type": "array",
           "items": { "type": "string" }
         }
       },
-      "required": ["checkoutReminders"]
+      "required": ["checkoutReminders", "standardWorkHours"]
     }
   },
   "firestore": {

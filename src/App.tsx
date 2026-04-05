@@ -31,7 +31,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { UserProfile, TimeLog, OperationType, UserRole } from './types';
+import { UserProfile, TimeLog, OperationType, UserRole, Project, ProjectStage, CompanySettings } from './types';
 import { cn } from './lib/utils';
 import { 
   Clock, 
@@ -697,6 +697,79 @@ const Layout = ({ user, profile, children }: { user: FirebaseUser, profile: User
   );
 };
 
+const CheckoutReminderModal = ({ isOpen, onClose, onConfirm, reminders }: { isOpen: boolean, onClose: () => void, onConfirm: () => void, reminders: string[] }) => {
+  const [checkedItems, setCheckedItems] = useState<Record<number, boolean>>({});
+
+  if (!isOpen) return null;
+
+  const allChecked = reminders.length === 0 || reminders.every((_, idx) => checkedItems[idx]);
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4">
+      <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+        <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-rose-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center">
+              <AlertCircle size={24} />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900">Checklist de Saída</h3>
+              <p className="text-[10px] text-rose-600 font-black uppercase tracking-widest">Atenção Necessária</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-2 hover:bg-white rounded-xl transition-all">
+            <X size={20} />
+          </button>
+        </div>
+        
+        <div className="p-6 space-y-4">
+          <p className="text-sm text-slate-600">Por favor, confirme se as seguintes tarefas foram realizadas antes de sair:</p>
+          
+          <div className="space-y-2">
+            {reminders.map((reminder, idx) => (
+              <label key={idx} className="flex items-center gap-3 p-4 bg-slate-50 rounded-2xl border border-slate-100 cursor-pointer hover:bg-slate-100 transition-all">
+                <input 
+                  type="checkbox" 
+                  checked={checkedItems[idx] || false}
+                  onChange={(e) => setCheckedItems(prev => ({ ...prev, [idx]: e.target.checked }))}
+                  className="w-5 h-5 rounded-lg border-2 border-slate-300 text-rose-600 focus:ring-rose-500"
+                />
+                <span className={cn("text-sm font-semibold", checkedItems[idx] ? "text-slate-400 line-through" : "text-slate-700")}>
+                  {reminder}
+                </span>
+              </label>
+            ))}
+            {reminders.length === 0 && (
+              <p className="text-sm text-slate-400 italic text-center py-4">Nenhum lembrete configurado. Pode prosseguir.</p>
+            )}
+          </div>
+        </div>
+
+        <div className="p-6 bg-slate-50 flex gap-3">
+          <button 
+            onClick={onClose}
+            className="flex-1 py-3 text-slate-600 font-bold hover:bg-white rounded-2xl transition-all"
+          >
+            Cancelar
+          </button>
+          <button 
+            onClick={onConfirm}
+            disabled={!allChecked}
+            className={cn(
+              "flex-[2] py-3 rounded-2xl font-bold transition-all shadow-lg",
+              allChecked 
+                ? "bg-rose-600 text-white hover:bg-rose-700 shadow-rose-100" 
+                : "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"
+            )}
+          >
+            Confirmar e Sair
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [lastLog, setLastLog] = useState<TimeLog | null>(null);
@@ -704,6 +777,9 @@ const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
   const [currentPos, setCurrentPos] = useState<[number, number] | null>(null);
   const [lastPosition, setLastPosition] = useState<GeolocationPosition | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
+  const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -743,16 +819,44 @@ const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
       handleFirestoreError(error, OperationType.LIST, 'timeLogs');
     });
 
+    // Listen for projects
+    const projQ = query(
+      collection(db, 'projects'),
+      where('companyId', '==', profile.companyId),
+      where('status', '==', 'active')
+    );
+    const unsubProj = onSnapshot(projQ, (snapshot) => {
+      setProjects(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Project)));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'projects'));
+
+    // Listen for company settings
+    const unsubSettings = onSnapshot(doc(db, 'companySettings', profile.companyId), (docSnap) => {
+      if (docSnap.exists()) {
+        setCompanySettings({ ...docSnap.data(), id: docSnap.id } as CompanySettings);
+      }
+    }, (error) => handleFirestoreError(error, OperationType.GET, `companySettings/${profile.companyId}`));
+
     return () => {
       clearInterval(timer);
       navigator.geolocation.clearWatch(watchId);
       unsubscribe();
+      unsubProj();
+      unsubSettings();
     };
   }, [profile]);
 
   const handleClockAction = async (type: 'in' | 'out') => {
+    if (type === 'out' && companySettings && companySettings.checkoutReminders.length > 0) {
+      setIsReminderModalOpen(true);
+      return;
+    }
+    await performClockAction(type);
+  };
+
+  const performClockAction = async (type: 'in' | 'out') => {
     setLoading(true);
     setStatus(null);
+    setIsReminderModalOpen(false);
 
     const registerLog = async (position: GeolocationPosition) => {
       try {
@@ -808,6 +912,12 @@ const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
 
   return (
     <div className="space-y-6">
+      <CheckoutReminderModal 
+        isOpen={isReminderModalOpen}
+        onClose={() => setIsReminderModalOpen(false)}
+        onConfirm={() => performClockAction('out')}
+        reminders={companySettings?.checkoutReminders || []}
+      />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Clock Card */}
         <div className="lg:col-span-2 bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 flex flex-col">
@@ -944,6 +1054,137 @@ const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
           </Link>
         </div>
       </div>
+
+      {/* Projects Section */}
+      <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+          <h3 className="font-bold text-slate-900 flex items-center gap-2">
+            <Globe size={20} className="text-indigo-600" /> Meus Projetos Ativos
+          </h3>
+          <p className="text-xs text-slate-500 mt-1">Acompanhe as etapas e marque o que já foi concluído.</p>
+        </div>
+        
+        <div className="p-6">
+          {projects.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {projects.map((project) => (
+                <div key={project.id} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-all">
+                  <div className="p-4 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between">
+                    <h4 className="font-bold text-indigo-900">{project.name}</h4>
+                    <span className="px-2 py-1 bg-indigo-100 text-indigo-700 text-[10px] font-black uppercase rounded-lg">Ativo</span>
+                  </div>
+                  <div className="p-4">
+                    <ProjectStagesList 
+                      projectId={project.id!} 
+                      companyId={profile.companyId} 
+                      isAdmin={false} 
+                      profile={profile}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-12 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+              <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center text-slate-200 mx-auto mb-4 shadow-sm">
+                <Globe size={32} />
+              </div>
+              <p className="text-slate-400 text-sm font-medium">Nenhum projeto atribuído no momento.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ProjectStagesList = ({ projectId, companyId, isAdmin, profile }: { projectId: string, companyId: string, isAdmin: boolean, profile?: UserProfile }) => {
+  const [stages, setStages] = useState<ProjectStage[]>([]);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'projectStages'),
+      where('projectId', '==', projectId),
+      where('companyId', '==', companyId),
+      orderBy('title', 'asc')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setStages(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as ProjectStage)));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'projectStages'));
+    return () => unsubscribe();
+  }, [projectId]);
+
+  const toggleStage = async (stage: ProjectStage) => {
+    if (!profile && !isAdmin) return;
+    
+    await setDoc(doc(db, 'projectStages', stage.id!), {
+      ...stage,
+      completed: !stage.completed,
+      completedBy: !stage.completed ? (profile?.uid || 'admin') : null,
+      completedByName: !stage.completed ? (profile?.displayName || 'Admin') : null,
+      completedAt: !stage.completed ? serverTimestamp() : null
+    });
+  };
+
+  return (
+    <div className="space-y-3">
+      {stages.map((stage) => (
+        <div key={stage.id} className="flex items-center gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100">
+          <button 
+            onClick={() => toggleStage(stage)}
+            className={cn(
+              "w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all",
+              stage.completed ? "bg-emerald-500 border-emerald-500 text-white" : "border-slate-300 bg-white"
+            )}
+          >
+            {stage.completed && <CheckCircle2 size={16} />}
+          </button>
+          <div className="flex-1">
+            <p className={cn("text-sm font-semibold", stage.completed ? "text-slate-400 line-through" : "text-slate-700")}>
+              {stage.title}
+            </p>
+            {stage.completed && stage.completedByName && (
+              <p className="text-[10px] text-emerald-600 font-bold uppercase">
+                Feito por {stage.completedByName} em {stage.completedAt ? format(stage.completedAt.toDate(), 'dd/MM HH:mm') : '---'}
+              </p>
+            )}
+          </div>
+          {isAdmin && (
+            <button 
+              onClick={async () => {
+                if (confirm('Excluir esta etapa?')) {
+                  await deleteDoc(doc(db, 'projectStages', stage.id!));
+                }
+              }}
+              className="text-slate-300 hover:text-rose-600"
+            >
+              <X size={16} />
+            </button>
+          )}
+        </div>
+      ))}
+      {isAdmin && (
+        <button 
+          onClick={async () => {
+            const title = prompt('Título da etapa:');
+            if (title) {
+              await addDoc(collection(db, 'projectStages'), {
+                projectId,
+                title,
+                completed: false,
+                companyId,
+                createdAt: serverTimestamp()
+              });
+            }
+          }}
+          className="w-full py-2 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 text-xs font-bold hover:border-indigo-300 hover:text-indigo-500 transition-all flex items-center justify-center gap-2"
+        >
+          <Plus size={14} /> Adicionar Etapa
+        </button>
+      )}
+      {stages.length === 0 && !isAdmin && (
+        <p className="text-xs text-slate-400 italic">Nenhuma etapa definida para este projeto.</p>
+      )}
     </div>
   );
 };
@@ -952,7 +1193,9 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [invitations, setInvitations] = useState<any[]>([]);
   const [logs, setLogs] = useState<TimeLog[]>([]);
-  const [activeTab, setActiveTab] = useState<'users' | 'logs' | 'map' | 'settings'>('logs');
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
+  const [activeTab, setActiveTab] = useState<'users' | 'logs' | 'map' | 'settings' | 'projects'>('logs');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
@@ -963,22 +1206,22 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
 
   useEffect(() => {
-    if ('Notification' in window) {
-      setNotificationsEnabled(Notification.permission === 'granted');
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      setNotificationsEnabled((window as any).Notification.permission === 'granted');
     }
   }, []);
 
   const requestNotificationPermission = async () => {
-    if (!('Notification' in window)) {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
       alert('Este navegador não suporta notificações.');
       return;
     }
 
-    const permission = await Notification.requestPermission();
+    const permission = await (window as any).Notification.requestPermission();
     setNotificationsEnabled(permission === 'granted');
     
     if (permission === 'granted') {
-      new Notification('Notificações Ativadas', {
+      new (window as any).Notification('Notificações Ativadas', {
         body: 'Você receberá alertas quando funcionários baterem o ponto.',
         icon: '/favicon.ico'
       });
@@ -1127,10 +1370,37 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
       setInvitations(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'invitations'));
 
+    // Listen for projects
+    const projQ = query(
+      collection(db, 'projects'),
+      where('companyId', '==', profile.companyId),
+      orderBy('createdAt', 'desc')
+    );
+    const unsubProj = onSnapshot(projQ, (snapshot) => {
+      setProjects(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Project)));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'projects'));
+
+    // Listen for company settings
+    const unsubSettings = onSnapshot(doc(db, 'companySettings', profile.companyId), (docSnap) => {
+      if (docSnap.exists()) {
+        setCompanySettings({ ...docSnap.data(), id: docSnap.id } as CompanySettings);
+      } else {
+        // Initialize default settings if they don't exist
+        const defaultSettings: CompanySettings = {
+          id: profile.companyId,
+          checkoutReminders: ['Conferir portas e janelas', 'Limpeza da obra']
+        };
+        setCompanySettings(defaultSettings);
+        setDoc(doc(db, 'companySettings', profile.companyId), defaultSettings);
+      }
+    }, (error) => handleFirestoreError(error, OperationType.GET, `companySettings/${profile.companyId}`));
+
     return () => {
       unsubUsers();
       unsubLogs();
       unsubInv();
+      unsubProj();
+      unsubSettings();
     };
   }, [profile]);
 
@@ -1169,6 +1439,15 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
             )}
           >
             Mapa
+          </button>
+          <button 
+            onClick={() => setActiveTab('projects')}
+            className={cn(
+              "px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap",
+              activeTab === 'projects' ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" : "text-slate-500 hover:text-slate-700"
+            )}
+          >
+            Projetos
           </button>
           <button 
             onClick={() => setActiveTab('users')}
@@ -1381,6 +1660,71 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
         </div>
       )}
 
+      {activeTab === 'projects' && (
+        <div className="space-y-8">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">Projetos e Obras</h3>
+              <p className="text-sm text-slate-500">Gerencie os projetos e as etapas de cada obra.</p>
+            </div>
+            <button 
+              onClick={async () => {
+                const name = prompt('Nome do Projeto:');
+                if (name) {
+                  await addDoc(collection(db, 'projects'), {
+                    name,
+                    companyId: profile.companyId,
+                    status: 'active',
+                    createdAt: serverTimestamp()
+                  });
+                }
+              }}
+              className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+            >
+              <Plus size={20} /> Novo Projeto
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6">
+            {projects.map((project) => (
+              <div key={project.id} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                      <FileText size={24} />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-900 text-lg">{project.name}</h4>
+                      <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Status: {project.status === 'active' ? 'Ativo' : 'Concluído'}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={async () => {
+                        if (confirm(`Deseja excluir o projeto "${project.name}" e todas as suas etapas?`)) {
+                          await deleteDoc(doc(db, 'projects', project.id!));
+                        }
+                      }}
+                      className="p-2 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-slate-50">
+                  <h5 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
+                    <CheckCircle2 size={16} className="text-indigo-600" /> Etapas do Serviço
+                  </h5>
+                  
+                  <ProjectStagesList projectId={project.id!} companyId={profile.companyId} isAdmin={true} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {activeTab === 'users' && (
         <div className="space-y-8">
           <div className="flex items-center justify-between">
@@ -1497,6 +1841,51 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
           <div>
             <h3 className="text-lg font-bold text-slate-900 mb-2">Configurações do Sistema</h3>
             <p className="text-slate-500 text-sm">Gerencie o acesso e os links de convite da sua empresa.</p>
+          </div>
+
+          <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                <CheckCircle2 size={18} className="text-indigo-600" /> Lembretes de Saída (Checklist Diário)
+              </h4>
+            </div>
+            <p className="text-sm text-slate-600">
+              Estes itens aparecerão para o funcionário quando ele clicar em "Saída". Use para garantir que nada seja esquecido na obra.
+            </p>
+            
+            <div className="space-y-2">
+              {companySettings?.checkoutReminders.map((reminder, idx) => (
+                <div key={idx} className="flex items-center gap-2 bg-white p-3 rounded-xl border border-slate-200">
+                  <span className="flex-1 text-sm text-slate-700">{reminder}</span>
+                  <button 
+                    onClick={async () => {
+                      const currentReminders = companySettings?.checkoutReminders || [];
+                      const newReminders = currentReminders.filter((_, i) => i !== idx);
+                      await setDoc(doc(db, 'companySettings', profile.companyId), {
+                        checkoutReminders: newReminders
+                      }, { merge: true });
+                    }}
+                    className="text-slate-300 hover:text-rose-600 p-1"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              ))}
+              <button 
+                onClick={async () => {
+                  const text = prompt('Novo lembrete:');
+                  if (text) {
+                    const currentReminders = companySettings?.checkoutReminders || [];
+                    await setDoc(doc(db, 'companySettings', profile.companyId), {
+                      checkoutReminders: [...currentReminders, text]
+                    }, { merge: true });
+                  }
+                }}
+                className="w-full py-2 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 text-xs font-bold hover:border-indigo-300 hover:text-indigo-500 transition-all flex items-center justify-center gap-2"
+              >
+                <Plus size={14} /> Adicionar Lembrete
+              </button>
+            </div>
           </div>
 
           <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
@@ -1703,7 +2092,7 @@ const NotificationHandler = ({ profile }: { profile: UserProfile }) => {
     if (profile.role !== 'admin') return;
 
     const sendLogNotification = async (log: TimeLog) => {
-      if (Notification.permission === 'granted') {
+      if (typeof window !== 'undefined' && 'Notification' in window && (window as any).Notification.permission === 'granted') {
         const title = log.type === 'in' ? 'Nova Entrada' : 'Nova Saída';
         const body = `${log.userName} acabou de bater o ponto (${log.type === 'in' ? 'Entrada' : 'Saída'}).`;
         
@@ -1719,7 +2108,7 @@ const NotificationHandler = ({ profile }: { profile: UserProfile }) => {
           } as any);
         } else {
           // Fallback to standard Notification
-          new Notification(title, {
+          new (window as any).Notification(title, {
             body,
             icon: '/favicon.ico',
             tag: log.id

@@ -6,6 +6,7 @@ export interface UserProfile {
   displayName: string;
   role: UserRole;
   companyId: string;
+  standardWorkHours?: number;
   createdAt: any;
 }
 
@@ -23,6 +24,8 @@ export interface TimeLog {
   userName: string;
   type: 'in' | 'out';
   timestamp: any;
+  isManual?: boolean;
+  addedBy?: string;
   location: {
     latitude: number;
     longitude: number;
@@ -54,6 +57,7 @@ export interface ProjectStage {
 
 export interface CompanySettings {
   id: string; // companyId
+  standardWorkHours: number;
   checkoutReminders: string[];
 }
 

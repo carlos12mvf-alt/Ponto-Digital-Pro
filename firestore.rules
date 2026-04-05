@@ -72,13 +72,20 @@ service cloud.firestore {
     }
 
     function isAdmin() {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        ((exists(userPath) && get(userPath).data.role == 'admin') ||
          (request.auth.token.email == "carlos12mvf@gmail.com" && request.auth.token.email_verified == true));
     }
 
     function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return get(userPath).data;
+    }
+
+    function userHasCompany(companyId) {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(userPath) && get(userPath).data.companyId == companyId;
     }
 
     function isValidUser(data) {
@@ -145,10 +152,14 @@ service cloud.firestore {
     match /timeLogs/{logId} {
       allow read: if isAuthenticated() && (
         resource.data.userId == request.auth.uid || 
-        (isAdmin() && getUserData().companyId == resource.data.companyId)
+        (request.auth.token.email == "carlos12mvf@gmail.com" && request.auth.token.email_verified == true) ||
+        (isAdmin() && userHasCompany(resource.data.companyId))
       );
       allow create: if isAuthenticated() && isValidTimeLog(request.resource.data) && 
-                    request.resource.data.companyId == getUserData().companyId;
+                    (
+                      (request.auth.token.email == "carlos12mvf@gmail.com" && request.auth.token.email_verified == true) ||
+                      userHasCompany(request.resource.data.companyId)
+                    );
       allow delete: if isAdmin();
     }
 
@@ -159,22 +170,42 @@ service cloud.firestore {
     }
 
     match /projects/{projectId} {
-      allow read: if isAuthenticated() && getUserData().companyId == resource.data.companyId;
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        userHasCompany(resource.data.companyId)
+      );
       allow create, update, delete: if isAdmin() && isValidProject(request.resource.data) && 
-                                    request.resource.data.companyId == getUserData().companyId;
+                                    (
+                                      isAdmin() ||
+                                      userHasCompany(request.resource.data.companyId)
+                                    );
     }
 
     match /projectStages/{stageId} {
-      allow read: if isAuthenticated() && getUserData().companyId == resource.data.companyId;
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        userHasCompany(resource.data.companyId)
+      );
       allow create, delete: if isAdmin() && isValidProjectStage(request.resource.data) && 
-                            request.resource.data.companyId == getUserData().companyId;
-      allow update: if isAuthenticated() && getUserData().companyId == resource.data.companyId && 
-                    isValidProjectStage(request.resource.data);
+                            (
+                              isAdmin() ||
+                              userHasCompany(request.resource.data.companyId)
+                            );
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        userHasCompany(resource.data.companyId)
+      ) && isValidProjectStage(request.resource.data);
     }
 
     match /companySettings/{companyId} {
-      allow read: if isAuthenticated() && getUserData().companyId == companyId;
-      allow create, update: if isAdmin() && companyId == getUserData().companyId && isValidCompanySettings(request.resource.data);
+      allow read: if isAuthenticated() && (
+        (request.auth.token.email == "carlos12mvf@gmail.com" && request.auth.token.email_verified == true) ||
+        userHasCompany(companyId)
+      );
+      allow create, update: if isAdmin() && (
+        (request.auth.token.email == "carlos12mvf@gmail.com" && request.auth.token.email_verified == true) ||
+        userHasCompany(companyId)
+      ) && isValidCompanySettings(request.resource.data);
     }
   }
 }
