@@ -700,6 +700,13 @@ const Layout = ({ user, profile, children }: { user: FirebaseUser, profile: User
               {profile.role === 'admin' && (
                 <Link to="/admin" title="Painel Admin" className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Administração</Link>
               )}
+              <button 
+                onClick={handleLogout}
+                title="Sair"
+                className="text-sm font-semibold text-rose-500 hover:text-rose-600 transition-colors flex items-center gap-1.5"
+              >
+                <LogOut size={16} /> Sair
+              </button>
             </div>
             
             <div className="flex items-center gap-3 pl-4 border-l border-slate-100">
@@ -1682,13 +1689,19 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
                   )}>
                     <div>
                       <p className={cn("text-xs font-bold uppercase tracking-wider mb-1", netBalance >= 0 ? "text-emerald-800" : "text-red-800")}>
-                        {netBalance >= 0 ? "Saldo de Extra Líquido" : "Saldo em Débito (Devedor)"}
+                        {selectedUserId 
+                          ? (netBalance >= 0 ? "Saldo do Funcionário" : "Saldo em Débito (Devedor)")
+                          : (netBalance >= 0 ? "Saldo Geral da Equipe" : "Débito Geral da Equipe")
+                        }
                       </p>
                       <h3 className={cn("text-2xl font-black", netBalance >= 0 ? "text-emerald-950" : "text-red-950")}>
                         {netBalance >= 0 ? '+' : '-'}{totalFormatted}
                       </h3>
                       <p className={cn("text-[10px] mt-1", netBalance >= 0 ? "text-emerald-600" : "text-red-600")}>
-                        {netBalance >= 0 ? "Crédito compensado (Bruto - Devidos)" : "Este funcionário está devendo horas no período"}
+                        {selectedUserId 
+                          ? (netBalance >= 0 ? "Crédito compensado (Bruto - Devidos) do funcionário" : "Este funcionário está devendo horas no período")
+                          : (netBalance >= 0 ? "Crédito geral acumulado por todos os funcionários" : "A equipe acumula horas de débito de trabalho no período")
+                        }
                       </p>
                     </div>
                     <div className={cn(
@@ -2053,16 +2066,57 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
                     const end = endOfDay(new Date(endDate + 'T23:59:59'));
                     return isWithinInterval(date, { start, end });
                   });
-                  const userMinutes = userLogs.reduce((sum, log) => sum + getOvertimeMinutes(log), 0);
-                  const formattedUserOT = formatOvertime(userMinutes);
+
+                  const userExtras = userLogs.reduce((sum, log) => sum + getOvertimeMinutes(log), 0);
+                  const userDelays = userLogs.reduce((sum, log) => sum + getDelayMinutes(log), 0);
+                  const userNet = userExtras - userDelays;
+
+                  const formattedOT = formatOvertime(userExtras) || '0h 0m';
+                  const formattedDel = formatOvertime(userDelays) || '0h 0m';
+                  const formattedNet = formatOvertime(Math.abs(userNet)) || '0h 0m';
+
                   return (
-                    <div className="mt-2 mb-4 p-3 bg-amber-50 rounded-2xl border border-amber-100 flex items-center gap-3 text-amber-800 font-sans">
-                      <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-600">
-                        <Clock size={16} />
+                    <div className="space-y-3 mt-2 mb-4 font-sans">
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="p-2.5 bg-amber-50/60 rounded-xl border border-amber-100 flex flex-col">
+                          <span className="text-[9px] text-amber-700 font-extrabold uppercase tracking-wider mb-0.5">Extras (+)</span>
+                          <span className="font-extrabold text-amber-950">{formattedOT}</span>
+                        </div>
+                        <div className="p-2.5 bg-rose-50/60 rounded-xl border border-rose-100 flex flex-col">
+                          <span className="text-[9px] text-rose-700 font-extrabold uppercase tracking-wider mb-0.5">Devido (-)</span>
+                          <span className="font-extrabold text-rose-950">{formattedDel}</span>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-[9px] text-amber-600 uppercase font-black leading-none mb-1">Horas Extras no Período</p>
-                        <p className="text-xs font-bold text-amber-900 leading-none">{formattedUserOT || '0h 0m'}</p>
+                      
+                      <div className={cn(
+                        "p-3 rounded-2xl border flex items-center justify-between",
+                        userNet >= 0 
+                          ? "bg-emerald-50/60 border-emerald-100/80 text-emerald-950" 
+                          : "bg-red-50/60 border-red-100/80 text-red-950"
+                      )}>
+                        <div className="flex items-center gap-2">
+                          {userNet >= 0 ? (
+                            <Clock size={16} className="text-emerald-600 shrink-0" />
+                          ) : (
+                            <AlertCircle size={16} className="text-red-600 animate-pulse shrink-0" />
+                          )}
+                          <div className="flex flex-col">
+                            <span className="text-[9px] font-extrabold uppercase tracking-wider leading-none mb-0.5">
+                              {userNet >= 0 ? "Saldo Geral" : "Saldo Devedor"}
+                            </span>
+                            <span className="text-xs font-black leading-none">
+                              {userNet >= 0 ? '+' : '-'}{formattedNet}
+                            </span>
+                          </div>
+                        </div>
+                        <span className={cn(
+                          "px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border",
+                          userNet >= 0 
+                            ? "bg-emerald-100/80 border-emerald-200 text-emerald-800" 
+                            : "bg-red-100/80 border-red-200 text-red-800"
+                        )}>
+                          {userNet >= 0 ? "Em Dia" : "Deve Horas"}
+                        </span>
                       </div>
                     </div>
                   );
@@ -2411,7 +2465,10 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
                 {netBalance >= 0 ? '+' : '-'}{formattedTotal}
               </h3>
               <p className={cn("text-[10px] mt-0.5", netBalance >= 0 ? "text-emerald-600/90" : "text-red-600/90")}>
-                {netBalance >= 0 ? "Crédito compensado (Bruto - Devidos)" : "Você está devendo horas para a empresa"}
+                {logs.length === 0 
+                  ? "Nenhum registro de ponto encontrado"
+                  : (netBalance >= 0 ? "Crédito compensado (Bruto - Devidos)" : "Você está devendo horas para a empresa")
+                }
               </p>
             </div>
             <div className={cn(
