@@ -18,6 +18,7 @@ import {
 import { 
   doc, 
   getDoc, 
+  getDocs,
   setDoc, 
   collection, 
   addDoc, 
@@ -890,13 +891,58 @@ const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
     const registerLog = async (position: GeolocationPosition) => {
       try {
         let overtimeMinutes = 0;
+        let delayMinutes = 0;
+        let rawOvertimeMinutes = 0;
+        let infoStr = '';
+
         if (type === 'out') {
           const now = new Date();
           const hrs = now.getHours();
           if (hrs >= 17) {
             const cutoff = new Date(now);
             cutoff.setHours(17, 0, 0, 0);
-            overtimeMinutes = Math.max(0, Math.floor((now.getTime() - cutoff.getTime()) / 60000));
+            rawOvertimeMinutes = Math.max(0, Math.floor((now.getTime() - cutoff.getTime()) / 60000));
+
+            // Query today's earliest check-in log for this user
+            try {
+              const start = startOfDay(now);
+              const end = endOfDay(now);
+              const inQuery = query(
+                collection(db, 'timeLogs'),
+                where('userId', '==', profile.uid),
+                where('type', '==', 'in'),
+                where('timestamp', '>=', start),
+                where('timestamp', '<=', end),
+                orderBy('timestamp', 'asc')
+              );
+              const inSnapshot = await getDocs(inQuery);
+              if (!inSnapshot.empty) {
+                const firstInLog = inSnapshot.docs[0].data();
+                const inTimestamp = firstInLog.timestamp;
+                if (inTimestamp) {
+                  const inDate = inTimestamp.toDate ? inTimestamp.toDate() : new Date(inTimestamp);
+                  const targetEntry = new Date(inDate);
+                  targetEntry.setHours(8, 0, 40, 0); // Standard entry is 08:00 (we allow 40s tolerance or strict 08:00:00)
+                  targetEntry.setHours(8, 0, 0, 0);  // Setting strict 08:00:00 for the check
+                  if (inDate.getTime() > targetEntry.getTime()) {
+                    delayMinutes = Math.floor((inDate.getTime() - targetEntry.getTime()) / 60000);
+                  }
+                }
+              }
+            } catch (err) {
+              console.error("Error fetching today's clock-in for delay subtraction:", err);
+            }
+
+            overtimeMinutes = Math.max(0, rawOvertimeMinutes - delayMinutes);
+            if (delayMinutes > 0) {
+              if (overtimeMinutes > 0) {
+                infoStr = ` (Passou das 17h: +${formatOvertime(rawOvertimeMinutes)}. Descontando atraso de entrada: -${formatOvertime(delayMinutes)}. Extra líquido: +${formatOvertime(overtimeMinutes)}!)`;
+              } else {
+                infoStr = ` (Atraso de entrada de -${formatOvertime(delayMinutes)} às 8h compensado com o tempo extra após as 17h)`;
+              }
+            } else if (overtimeMinutes > 0) {
+              infoStr = ` (+${formatOvertime(overtimeMinutes)} de hora extra registrado automaticamente!)`;
+            }
           }
         }
 
@@ -911,16 +957,17 @@ const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
             accuracy: position.coords.accuracy
           },
           companyId: profile.companyId,
-          ...(type === 'out' ? { overtimeMinutes } : {})
+          ...(type === 'out' ? { 
+            overtimeMinutes,
+            delayMinutes,
+            rawOvertimeMinutes
+          } : {})
         };
 
         await addDoc(collection(db, 'timeLogs'), logData);
-        const otText = type === 'out' && overtimeMinutes > 0 
-          ? ` (+${formatOvertime(overtimeMinutes)} de hora extra registrado automaticamente!)` 
-          : '';
         setStatus({ 
           type: 'success', 
-          msg: `Ponto de ${type === 'in' ? 'entrada' : 'saída'} registrado com sucesso!${otText}` 
+          msg: `Ponto de ${type === 'in' ? 'entrada' : 'saída'} registrado com sucesso!${infoStr}` 
         });
       } catch (error) {
         handleFirestoreError(error, OperationType.CREATE, 'timeLogs');
@@ -1248,6 +1295,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   // Filters
   const [startDate, setStartDate] = useState(format(new Date(), 'yyyy-MM-01'));
   const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [selectedUserId, setSelectedUserId] = useState<string>('');
 
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -1344,6 +1392,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   const generatePDF = () => {
     const doc = new jsPDF();
     const filteredLogs = logs.filter(log => {
+      if (selectedUserId && log.userId !== selectedUserId) return false;
       if (!log.timestamp) return false;
       const date = log.timestamp.toDate();
       // Use local time for date comparison
@@ -1357,14 +1406,23 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
       return;
     }
 
+    const selectedUser = users.find(u => u.uid === selectedUserId);
+
     // Header
     doc.setFontSize(18);
     doc.text('Relatório de Ponto Digital', 14, 22);
     doc.setFontSize(11);
     doc.setTextColor(100);
     doc.text(`Empresa: ${profile.companyId}`, 14, 30);
-    doc.text(`Período: ${format(new Date(startDate + 'T00:00:00'), 'dd/MM/yyyy')} até ${format(new Date(endDate + 'T00:00:00'), 'dd/MM/yyyy')}`, 14, 36);
-    doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 14, 42);
+    
+    if (selectedUser) {
+      doc.text(`Funcionário: ${selectedUser.displayName || selectedUser.email}`, 14, 36);
+      doc.text(`Período: ${format(new Date(startDate + 'T00:00:00'), 'dd/MM/yyyy')} até ${format(new Date(endDate + 'T00:00:00'), 'dd/MM/yyyy')}`, 14, 42);
+      doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 14, 48);
+    } else {
+      doc.text(`Período: ${format(new Date(startDate + 'T00:00:00'), 'dd/MM/yyyy')} até ${format(new Date(endDate + 'T00:00:00'), 'dd/MM/yyyy')}`, 14, 36);
+      doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 14, 42);
+    }
 
     const tableData = filteredLogs.map(log => {
       const otMin = getOvertimeMinutes(log);
@@ -1379,14 +1437,18 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
     });
 
     autoTable(doc, {
-      startY: 50,
+      startY: selectedUser ? 56 : 50,
       head: [['Funcionário', 'Tipo', 'Data/Hora', 'Hora Extra', 'Localização']],
       body: tableData,
       theme: 'striped',
       headStyles: { fillColor: [79, 70, 229] },
     });
 
-    doc.save(`relatorio_ponto_${startDate}_${endDate}.pdf`);
+    const pdfName = selectedUser 
+      ? `relatorio_ponto_${(selectedUser.displayName || 'funcionario').replace(/\s+/g, '_').toLowerCase()}_${startDate}_${endDate}.pdf`
+      : `relatorio_ponto_${startDate}_${endDate}.pdf`;
+
+    doc.save(pdfName);
   };
 
   useEffect(() => {
@@ -1534,36 +1596,96 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
           {/* Admin Team Overtime Stats Card */}
           {(() => {
             const filtered = logs.filter(log => {
+              if (selectedUserId && log.userId !== selectedUserId) return false;
               if (!log.timestamp) return false;
               const date = log.timestamp.toDate();
               const start = startOfDay(new Date(startDate + 'T00:00:00'));
               const end = endOfDay(new Date(endDate + 'T23:59:59'));
               return isWithinInterval(date, { start, end });
             });
-            const totalMinutes = filtered.reduce((acc, log) => acc + getOvertimeMinutes(log), 0);
+            const totalMinutes = filtered.reduce((acc, log) => acc + (log.overtimeMinutes || 0), 0);
+            const totalDelays = filtered.reduce((acc, log) => acc + (log.delayMinutes || 0), 0);
+            const totalRawMinutes = filtered.reduce((acc, log) => acc + (log.rawOvertimeMinutes || (log.type === 'out' ? getOvertimeMinutes(log) : 0)), 0);
+
             const totalFormatted = formatOvertime(totalMinutes) || '0h 0m';
+            const totalDelaysFormatted = formatOvertime(totalDelays) || '0h 0m';
+            const totalRawFormatted = formatOvertime(totalRawMinutes) || '0h 0m';
+
             const overtimeCount = filtered.filter(l => getOvertimeMinutes(l) > 0).length;
+            const selectedUser = users.find(u => u.uid === selectedUserId);
+            const statsTitle = selectedUser 
+              ? `Total de Horas Extras de ${selectedUser.displayName || selectedUser.email}`
+              : "Total de Horas Extras da Equipe";
+            const statsDesc = selectedUser 
+              ? `Horas acumuladas das saídas após às 17h00 no período para este funcionário`
+              : "Horas acumuladas das saídas após às 17h00 no período";
             
             return (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 font-sans">
-                <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 p-6 rounded-3xl border border-amber-100 shadow-sm flex items-center justify-between">
-                  <div>
-                    <p className="text-amber-850 text-xs font-bold uppercase tracking-wider mb-1">Total de Horas Extras da Equipe</p>
-                    <h3 className="text-3xl font-black text-amber-900">{totalFormatted}</h3>
-                    <p className="text-amber-600 text-xs mt-1">Horas acumuladas das saídas após às 17h00 no período</p>
+              <div className="space-y-6 font-sans">
+                {/* Visual compensation rule box */}
+                <div className="bg-indigo-50/50 rounded-3xl p-5 border border-indigo-100/60 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-bold text-indigo-900 flex items-center gap-2">
+                      <Clock size={16} className="text-indigo-600" />
+                      Regra de Compensação de Horas
+                    </h4>
+                    <p className="text-xs text-indigo-700/85">
+                      Para cada dia de trabalho, a <strong>Entrada é às 08h00</strong> e a <strong>Saída é às 17h00</strong>. Se a pessoa chegar atrasada (depois das 08h00) e fizer hora extra no mesmo dia (após às 17h00), o tempo de atraso é descontado do extra de saída. O saldo abaixo reflete essa compensação diária.
+                    </p>
                   </div>
-                  <div className="w-12 h-12 bg-amber-500/10 rounded-2xl flex items-center justify-center text-amber-600 border border-amber-200/50">
-                    <Clock size={24} />
+                  <div className="flex bg-white/80 backdrop-blur px-4 py-2.5 rounded-2xl border border-indigo-100 text-xs font-bold text-indigo-800 gap-2 items-center divide-x divide-indigo-100 shrink-0">
+                    <div>Entrada: <span className="text-indigo-900">08h00</span></div>
+                    <div className="pl-2">Saída: <span className="text-indigo-900">17h00</span></div>
                   </div>
                 </div>
-                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
-                  <div>
-                    <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Registros com Hora Extra</p>
-                    <h3 className="text-3xl font-black text-slate-800">{overtimeCount} ocorrências</h3>
-                    <p className="text-slate-400 text-xs mt-1">Saídas pontuadas após as 17h00</p>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {/* Raw Overtime Card */}
+                  <div className="bg-gradient-to-br from-amber-50 to-amber-100/30 p-6 rounded-3xl border border-amber-100 shadow-sm flex items-center justify-between">
+                    <div>
+                      <p className="text-amber-800 text-xs font-bold uppercase tracking-wider mb-1">Horas Extras Brutas</p>
+                      <h3 className="text-2xl font-black text-amber-900">{totalRawFormatted}</h3>
+                      <p className="text-amber-600 text-[10px] mt-1">Total trabalhado após as 17h00</p>
+                    </div>
+                    <div className="w-12 h-12 bg-amber-500/10 rounded-2xl flex items-center justify-center text-amber-600 border border-amber-200/50">
+                      <Clock size={24} />
+                    </div>
                   </div>
-                  <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 border border-indigo-100">
-                    <TrendingUp size={24} />
+
+                  {/* Arrival Delay Card */}
+                  <div className="bg-gradient-to-br from-rose-50 to-rose-100/30 p-6 rounded-3xl border border-rose-100 shadow-sm flex items-center justify-between">
+                    <div>
+                      <p className="text-rose-800 text-xs font-bold uppercase tracking-wider mb-1">Atrasos de Entrada</p>
+                      <h3 className="text-2xl font-black text-rose-900">{totalDelaysFormatted}</h3>
+                      <p className="text-rose-600 text-[10px] mt-1">Soma de chegadas após as 08h00</p>
+                    </div>
+                    <div className="w-12 h-12 bg-rose-500/10 rounded-2xl flex items-center justify-center text-rose-600 border border-rose-200/50">
+                      <AlertCircle size={24} />
+                    </div>
+                  </div>
+
+                  {/* Net Overtime Card */}
+                  <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/30 p-6 rounded-3xl border border-emerald-100 shadow-sm flex items-center justify-between">
+                    <div>
+                      <p className="text-emerald-800 text-xs font-bold uppercase tracking-wider mb-1">Saldo de Extra Líquido</p>
+                      <h3 className="text-2xl font-black text-emerald-900">{totalFormatted}</h3>
+                      <p className="text-emerald-600 text-[10px] mt-1">Horas líquidas creditadas (Bruto - Atrasos)</p>
+                    </div>
+                    <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center text-emerald-600 border border-emerald-200/50">
+                      <TrendingUp size={24} />
+                    </div>
+                  </div>
+
+                  {/* Overtime count Card */}
+                  <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between md:col-span-3 xl:col-span-1">
+                    <div>
+                      <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Entradas com Extra</p>
+                      <h3 className="text-2xl font-black text-slate-800">{overtimeCount} ocorrências</h3>
+                      <p className="text-slate-400 text-[10px] mt-1">Saídas pontuadas após as 17h00</p>
+                    </div>
+                    <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-600 border border-slate-100">
+                      <Users size={24} />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1571,6 +1693,21 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
           })()}
 
           <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col md:flex-row md:items-end gap-4">
+            <div className="flex-1 space-y-2">
+              <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-2">
+                <Users size={14} /> Filtrar p/ Funcionário
+              </label>
+              <select
+                value={selectedUserId}
+                onChange={(e) => setSelectedUserId(e.target.value)}
+                className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-white"
+              >
+                <option value="">Todos os Funcionários</option>
+                {users.map(u => (
+                  <option key={u.uid} value={u.uid}>{u.displayName || u.email}</option>
+                ))}
+              </select>
+            </div>
             <div className="flex-1 space-y-2">
               <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-2">
                 <Calendar size={14} /> Data Inicial
@@ -1612,6 +1749,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
                         className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                         checked={(() => {
                           const filtered = logs.filter(log => {
+                            if (selectedUserId && log.userId !== selectedUserId) return false;
                             if (!log.timestamp) return true;
                             const date = log.timestamp.toDate();
                             const start = startOfDay(new Date(startDate + 'T00:00:00'));
@@ -1621,6 +1759,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
                           return filtered.length > 0 && selectedLogIds.length === filtered.length;
                         })()}
                         onChange={() => toggleSelectAll(logs.filter(log => {
+                          if (selectedUserId && log.userId !== selectedUserId) return false;
                           if (!log.timestamp) return true;
                           const date = log.timestamp.toDate();
                           const start = startOfDay(new Date(startDate + 'T00:00:00'));
@@ -1649,6 +1788,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
                 <tbody className="divide-y divide-slate-50">
                   {(() => {
                     const filtered = logs.filter(log => {
+                      if (selectedUserId && log.userId !== selectedUserId) return false;
                       if (!log.timestamp) return true;
                       const date = log.timestamp.toDate();
                       const start = startOfDay(new Date(startDate + 'T00:00:00'));
@@ -1693,10 +1833,39 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
                           </div>
                         </td>
                         <td className="px-6 py-4 text-sm font-semibold">
-                          {log.type === 'out' && getOvertimeMinutes(log) > 0 ? (
-                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100/60 text-amber-700 border border-amber-200">
-                              +{formatOvertime(getOvertimeMinutes(log))}
-                            </span>
+                          {log.type === 'out' ? (
+                            log.overtimeMinutes !== undefined && log.overtimeMinutes > 0 ? (
+                              <div className="flex flex-col">
+                                <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100/60 text-amber-700 border border-amber-200 w-fit">
+                                  +{formatOvertime(log.overtimeMinutes)}
+                                </span>
+                                {log.delayMinutes ? (
+                                  <span className="text-[10px] text-rose-500 font-medium mt-0.5">
+                                    (Atraso: -{formatOvertime(log.delayMinutes)})
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : log.delayMinutes && log.delayMinutes > 0 && log.rawOvertimeMinutes && log.rawOvertimeMinutes > 0 ? (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-xs text-rose-400 font-medium line-through">
+                                  +{formatOvertime(log.rawOvertimeMinutes)}
+                                </span>
+                                <span className="text-[10px] text-slate-400 font-normal">
+                                  Compensado (Atr: -{formatOvertime(log.delayMinutes)})
+                                </span>
+                              </div>
+                            ) : log.overtimeMinutes !== undefined && log.overtimeMinutes === 0 ? (
+                              <span className="text-slate-300 text-xs">-</span>
+                            ) : (
+                              // Fallback for older entries
+                              getOvertimeMinutes(log) > 0 ? (
+                                <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100/60 text-amber-700 border border-amber-200">
+                                  +{formatOvertime(getOvertimeMinutes(log))}
+                                </span>
+                              ) : (
+                                <span className="text-slate-300 text-xs">-</span>
+                              )
+                            )
                           ) : (
                             <span className="text-slate-300 text-xs">-</span>
                           )}
@@ -1862,6 +2031,30 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
                     </button>
                   )}
                 </div>
+                
+                {(() => {
+                  const userLogs = logs.filter(log => {
+                    if (log.userId !== u.uid) return false;
+                    if (!log.timestamp) return false;
+                    const date = log.timestamp.toDate();
+                    const start = startOfDay(new Date(startDate + 'T00:00:00'));
+                    const end = endOfDay(new Date(endDate + 'T23:59:59'));
+                    return isWithinInterval(date, { start, end });
+                  });
+                  const userMinutes = userLogs.reduce((sum, log) => sum + getOvertimeMinutes(log), 0);
+                  const formattedUserOT = formatOvertime(userMinutes);
+                  return (
+                    <div className="mt-2 mb-4 p-3 bg-amber-50 rounded-2xl border border-amber-100 flex items-center gap-3 text-amber-800 font-sans">
+                      <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-600">
+                        <Clock size={16} />
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-amber-600 uppercase font-black leading-none mb-1">Horas Extras no Período</p>
+                        <p className="text-xs font-bold text-amber-900 leading-none">{formattedUserOT || '0h 0m'}</p>
+                      </div>
+                    </div>
+                  );
+                })()}
                 
                 <div className="mt-auto pt-4 border-t border-slate-50 flex items-center justify-between">
                   <span className={cn(
@@ -2130,26 +2323,78 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
     return () => unsubscribe();
   }, [profile]);
 
-  const totalOvertime = logs.reduce((sum, log) => sum + getOvertimeMinutes(log), 0);
+  const totalOvertime = logs.reduce((sum, log) => sum + (log.overtimeMinutes || 0), 0);
+  const totalDelays = logs.reduce((sum, log) => sum + (log.delayMinutes || 0), 0);
+  const totalRawOvertime = logs.reduce((sum, log) => sum + (log.rawOvertimeMinutes || (log.type === 'out' ? getOvertimeMinutes(log) : 0)), 0);
+
   const formattedTotal = formatOvertime(totalOvertime) || '0h 0m';
+  const formattedDelays = formatOvertime(totalDelays) || '0h 0m';
+  const formattedRaw = formatOvertime(totalRawOvertime) || '0h 0m';
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-900">Meu Histórico</h2>
-          <p className="text-slate-500">Todos os seus registros de ponto</p>
+          <p className="text-slate-500">Todos os seus registros de ponto de entrada e saída</p>
+        </div>
+      </div>
+
+      {/* Regra de Compensação e Visualização */}
+      <div className="space-y-6">
+        {/* Info Box */}
+        <div className="bg-indigo-50/50 rounded-3xl p-5 border border-indigo-100/60 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h4 className="text-sm font-bold text-indigo-900 flex items-center gap-2">
+              <Clock size={16} className="text-indigo-600" />
+              Sua Regra de Compensação de Horas
+            </h4>
+            <p className="text-xs text-indigo-700/85">
+              Seu horário padrão de entrada é às <strong>08h00</strong> e saída é às <strong>17h00</strong>. Se você chegar atrasado pela manhã, esse tempo de atraso será compensado (descontado) automaticamente em qualquer hora extra realizada após às 17h00 do mesmo dia.
+            </p>
+          </div>
+          <div className="flex bg-white/80 backdrop-blur px-4 py-2.5 rounded-2xl border border-indigo-100 text-xs font-bold text-indigo-800 gap-2 items-center divide-x divide-indigo-100 shrink-0">
+            <div>Entrada Ideal: <span className="text-indigo-900">08h00</span></div>
+            <div className="pl-2">Saída Ideal: <span className="text-indigo-900">17h00</span></div>
+          </div>
         </div>
 
-        {/* Overtime Stats Card */}
-        <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 px-5 py-3 rounded-2xl border border-amber-100 shadow-sm flex items-center gap-3 shrink-0 self-start sm:self-auto">
-          <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center text-amber-600 border border-amber-200/50 shrink-0">
-            <Clock size={20} />
+        {/* Bento grid metrics */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 font-sans">
+          {/* Card 1: Raw Extras */}
+          <div className="bg-gradient-to-br from-amber-50 to-amber-100/30 p-5 rounded-3xl border border-amber-100/70 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-amber-800 text-[10px] uppercase tracking-wider font-extrabold mb-1">Horas Extras Brutas</p>
+              <h3 className="text-xl font-black text-amber-900">{formattedRaw}</h3>
+              <p className="text-amber-600/90 text-[10px] mt-0.5">Tempo bruto acumulado após as 17h00</p>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-200/50 flex items-center justify-center text-amber-600 shrink-0">
+              <Clock size={20} />
+            </div>
           </div>
-          <div>
-            <p className="text-amber-800 text-[10px] font-bold uppercase tracking-wider">Total de Horas Extras</p>
-            <h3 className="text-lg font-black text-amber-900">{formattedTotal}</h3>
-            <p className="text-[10px] text-amber-600">Após as 17h00</p>
+
+          {/* Card 2: Delays */}
+          <div className="bg-gradient-to-br from-rose-50 to-rose-100/30 p-5 rounded-3xl border border-rose-100/70 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-rose-800 text-[10px] uppercase tracking-wider font-extrabold mb-1">Atrasos de Entrada</p>
+              <h3 className="text-xl font-black text-rose-900">{formattedDelays}</h3>
+              <p className="text-rose-600/90 text-[10px] mt-0.5">Tempo devido por entrar após as 08h00</p>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-200/50 flex items-center justify-center text-rose-600 shrink-0">
+              <AlertCircle size={20} />
+            </div>
+          </div>
+
+          {/* Card 3: Net balance */}
+          <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/30 p-5 rounded-3xl border border-emerald-100/70 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-emerald-800 text-[10px] uppercase tracking-wider font-extrabold mb-1">Saldo de Extra Líquido</p>
+              <h3 className="text-xl font-black text-emerald-950">{formattedTotal}</h3>
+              <p className="text-emerald-600/90 text-[10px] mt-0.5">Líquido acumulado creditado (Bruto - Atrasos)</p>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-200/50 flex items-center justify-center text-emerald-600 shrink-0">
+              <TrendingUp size={20} />
+            </div>
           </div>
         </div>
       </div>
@@ -2186,10 +2431,39 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
                       {log.timestamp ? format(log.timestamp.toDate(), 'HH:mm:ss') : '--:--:--'}
                     </td>
                     <td className="px-6 py-4 text-sm font-semibold">
-                      {log.type === 'out' && otMin > 0 ? (
-                        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100/60 text-amber-700 border border-amber-200">
-                          +{formatOvertime(otMin)}
-                        </span>
+                      {log.type === 'out' ? (
+                        log.overtimeMinutes !== undefined && log.overtimeMinutes > 0 ? (
+                          <div className="flex flex-col">
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100/60 text-amber-700 border border-amber-200 w-fit">
+                              +{formatOvertime(log.overtimeMinutes)}
+                            </span>
+                            {log.delayMinutes ? (
+                              <span className="text-[10px] text-rose-500 font-medium mt-0.5">
+                                (Atraso: -{formatOvertime(log.delayMinutes)})
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : log.delayMinutes && log.delayMinutes > 0 && log.rawOvertimeMinutes && log.rawOvertimeMinutes > 0 ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-xs text-rose-400 font-medium line-through">
+                              +{formatOvertime(log.rawOvertimeMinutes)}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-normal">
+                              Compensado (Atr: -{formatOvertime(log.delayMinutes)})
+                            </span>
+                          </div>
+                        ) : log.overtimeMinutes !== undefined && log.overtimeMinutes === 0 ? (
+                          <span className="text-slate-300 text-xs">-</span>
+                        ) : (
+                          // Fallback for older entries
+                          otMin > 0 ? (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100/60 text-amber-700 border border-amber-200">
+                              +{formatOvertime(otMin)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300 text-xs">-</span>
+                          )
+                        )
                       ) : (
                         <span className="text-slate-300 text-xs">-</span>
                       )}

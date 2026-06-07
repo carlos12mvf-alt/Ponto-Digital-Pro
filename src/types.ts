@@ -27,6 +27,8 @@ export interface TimeLog {
   isManual?: boolean;
   addedBy?: string;
   overtimeMinutes?: number;
+  delayMinutes?: number;
+  rawOvertimeMinutes?: number;
   location: {
     latitude: number;
     longitude: number;

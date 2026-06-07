@@ -27,6 +27,8 @@
         "isManual": { "type": "boolean" },
         "addedBy": { "type": "string" },
         "overtimeMinutes": { "type": "integer", "description": "Number of overtime minutes registered (past 17:00)." },
+        "delayMinutes": { "type": "integer", "description": "Number of minutes the user was late in the morning (after 08:00)." },
+        "rawOvertimeMinutes": { "type": "integer", "description": "Number of raw overtime minutes past 17:00." },
         "location": {
           "type": "object",
           "properties": {
