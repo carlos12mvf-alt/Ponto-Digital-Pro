@@ -26,6 +26,7 @@
         "timestamp": { "type": "string", "format": "date-time" },
         "isManual": { "type": "boolean" },
         "addedBy": { "type": "string" },
+        "overtimeMinutes": { "type": "integer", "description": "Number of overtime minutes registered (past 17:00)." },
         "location": {
           "type": "object",
           "properties": {

@@ -26,6 +26,7 @@ export interface TimeLog {
   timestamp: any;
   isManual?: boolean;
   addedBy?: string;
+  overtimeMinutes?: number;
   location: {
     latitude: number;
     longitude: number;

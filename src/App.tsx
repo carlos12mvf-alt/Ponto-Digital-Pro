@@ -57,7 +57,8 @@ import {
   FileText,
   Download,
   Calendar,
-  Filter
+  Filter,
+  TrendingUp
 } from 'lucide-react';
 import { format, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -77,6 +78,34 @@ let DefaultIcon = L.icon({
   iconAnchor: [12, 41]
 });
 L.Marker.prototype.options.icon = DefaultIcon;
+
+// --- Overtime Helpers ---
+export const getOvertimeMinutes = (log: TimeLog): number => {
+  if (log.overtimeMinutes !== undefined) return log.overtimeMinutes;
+  try {
+    if (log.type !== 'out' || !log.timestamp) return 0;
+    const date = log.timestamp.toDate ? log.timestamp.toDate() : new Date(log.timestamp);
+    const hours = date.getHours();
+    if (hours >= 17) {
+      const cutoff = new Date(date);
+      cutoff.setHours(17, 0, 0, 0);
+      return Math.max(0, Math.floor((date.getTime() - cutoff.getTime()) / 60000));
+    }
+  } catch (e) {
+    console.error('Error calculating overtime', e);
+  }
+  return 0;
+};
+
+export const formatOvertime = (minutes: number): string => {
+  if (minutes <= 0) return '';
+  const hrs = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hrs > 0) {
+    return `${hrs}h ${mins}m`;
+  }
+  return `${mins} min`;
+};
 
 // --- Map Helper ---
 const ChangeView = ({ center }: { center: [number, number] }) => {
@@ -860,6 +889,17 @@ const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
 
     const registerLog = async (position: GeolocationPosition) => {
       try {
+        let overtimeMinutes = 0;
+        if (type === 'out') {
+          const now = new Date();
+          const hrs = now.getHours();
+          if (hrs >= 17) {
+            const cutoff = new Date(now);
+            cutoff.setHours(17, 0, 0, 0);
+            overtimeMinutes = Math.max(0, Math.floor((now.getTime() - cutoff.getTime()) / 60000));
+          }
+        }
+
         const logData: Omit<TimeLog, 'id'> = {
           userId: profile.uid,
           userName: profile.displayName,
@@ -870,13 +910,17 @@ const EmployeeDashboard = ({ profile }: { profile: UserProfile }) => {
             longitude: position.coords.longitude,
             accuracy: position.coords.accuracy
           },
-          companyId: profile.companyId
+          companyId: profile.companyId,
+          ...(type === 'out' ? { overtimeMinutes } : {})
         };
 
         await addDoc(collection(db, 'timeLogs'), logData);
+        const otText = type === 'out' && overtimeMinutes > 0 
+          ? ` (+${formatOvertime(overtimeMinutes)} de hora extra registrado automaticamente!)` 
+          : '';
         setStatus({ 
           type: 'success', 
-          msg: `Ponto de ${type === 'in' ? 'entrada' : 'saída'} registrado com sucesso!` 
+          msg: `Ponto de ${type === 'in' ? 'entrada' : 'saída'} registrado com sucesso!${otText}` 
         });
       } catch (error) {
         handleFirestoreError(error, OperationType.CREATE, 'timeLogs');
@@ -1322,16 +1366,21 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
     doc.text(`Período: ${format(new Date(startDate + 'T00:00:00'), 'dd/MM/yyyy')} até ${format(new Date(endDate + 'T00:00:00'), 'dd/MM/yyyy')}`, 14, 36);
     doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 14, 42);
 
-    const tableData = filteredLogs.map(log => [
-      log.userName,
-      log.type === 'in' ? 'Entrada' : 'Saída',
-      log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy HH:mm:ss') : '---',
-      `${log.location.latitude.toFixed(4)}, ${log.location.longitude.toFixed(4)}`
-    ]);
+    const tableData = filteredLogs.map(log => {
+      const otMin = getOvertimeMinutes(log);
+      const otStr = otMin > 0 ? `+${formatOvertime(otMin)}` : '-';
+      return [
+        log.userName,
+        log.type === 'in' ? 'Entrada' : 'Saída',
+        log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy HH:mm:ss') : '---',
+        otStr,
+        `${log.location.latitude.toFixed(4)}, ${log.location.longitude.toFixed(4)}`
+      ];
+    });
 
     autoTable(doc, {
       startY: 50,
-      head: [['Funcionário', 'Tipo', 'Data/Hora', 'Localização']],
+      head: [['Funcionário', 'Tipo', 'Data/Hora', 'Hora Extra', 'Localização']],
       body: tableData,
       theme: 'striped',
       headStyles: { fillColor: [79, 70, 229] },
@@ -1388,6 +1437,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
         // Initialize default settings if they don't exist
         const defaultSettings: CompanySettings = {
           id: profile.companyId,
+          standardWorkHours: 8,
           checkoutReminders: ['Conferir portas e janelas', 'Limpeza da obra']
         };
         setCompanySettings(defaultSettings);
@@ -1481,6 +1531,45 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
 
       {activeTab === 'logs' && (
         <div className="space-y-6">
+          {/* Admin Team Overtime Stats Card */}
+          {(() => {
+            const filtered = logs.filter(log => {
+              if (!log.timestamp) return false;
+              const date = log.timestamp.toDate();
+              const start = startOfDay(new Date(startDate + 'T00:00:00'));
+              const end = endOfDay(new Date(endDate + 'T23:59:59'));
+              return isWithinInterval(date, { start, end });
+            });
+            const totalMinutes = filtered.reduce((acc, log) => acc + getOvertimeMinutes(log), 0);
+            const totalFormatted = formatOvertime(totalMinutes) || '0h 0m';
+            const overtimeCount = filtered.filter(l => getOvertimeMinutes(l) > 0).length;
+            
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 font-sans">
+                <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 p-6 rounded-3xl border border-amber-100 shadow-sm flex items-center justify-between">
+                  <div>
+                    <p className="text-amber-850 text-xs font-bold uppercase tracking-wider mb-1">Total de Horas Extras da Equipe</p>
+                    <h3 className="text-3xl font-black text-amber-900">{totalFormatted}</h3>
+                    <p className="text-amber-600 text-xs mt-1">Horas acumuladas das saídas após às 17h00 no período</p>
+                  </div>
+                  <div className="w-12 h-12 bg-amber-500/10 rounded-2xl flex items-center justify-center text-amber-600 border border-amber-200/50">
+                    <Clock size={24} />
+                  </div>
+                </div>
+                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
+                  <div>
+                    <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Registros com Hora Extra</p>
+                    <h3 className="text-3xl font-black text-slate-800">{overtimeCount} ocorrências</h3>
+                    <p className="text-slate-400 text-xs mt-1">Saídas pontuadas após as 17h00</p>
+                  </div>
+                  <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 border border-indigo-100">
+                    <TrendingUp size={24} />
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col md:flex-row md:items-end gap-4">
             <div className="flex-1 space-y-2">
               <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-2">
@@ -1543,6 +1632,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Funcionário</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Tipo</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Data/Hora</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Hora Extra</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Localização</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">
                       {selectedLogIds.length > 0 ? (
@@ -1602,6 +1692,15 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
                             </p>
                           </div>
                         </td>
+                        <td className="px-6 py-4 text-sm font-semibold">
+                          {log.type === 'out' && getOvertimeMinutes(log) > 0 ? (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100/60 text-amber-700 border border-amber-200">
+                              +{formatOvertime(getOvertimeMinutes(log))}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300 text-xs">-</span>
+                          )}
+                        </td>
                         <td className="px-6 py-4">
                           <a 
                             href={`https://www.google.com/maps?q=${log.location.latitude},${log.location.longitude}`}
@@ -1625,7 +1724,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
                       </tr>
                     )) : (
                       <tr>
-                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400">Nenhum registro encontrado para este período.</td>
+                        <td colSpan={7} className="px-6 py-12 text-center text-slate-400">Nenhum registro encontrado para este período.</td>
                       </tr>
                     );
                   })()}
@@ -2031,11 +2130,28 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
     return () => unsubscribe();
   }, [profile]);
 
+  const totalOvertime = logs.reduce((sum, log) => sum + getOvertimeMinutes(log), 0);
+  const formattedTotal = formatOvertime(totalOvertime) || '0h 0m';
+
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-slate-900">Meu Histórico</h2>
-        <p className="text-slate-500">Todos os seus registros de ponto</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900">Meu Histórico</h2>
+          <p className="text-slate-500">Todos os seus registros de ponto</p>
+        </div>
+
+        {/* Overtime Stats Card */}
+        <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 px-5 py-3 rounded-2xl border border-amber-100 shadow-sm flex items-center gap-3 shrink-0 self-start sm:self-auto">
+          <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center text-amber-600 border border-amber-200/50 shrink-0">
+            <Clock size={20} />
+          </div>
+          <div>
+            <p className="text-amber-800 text-[10px] font-bold uppercase tracking-wider">Total de Horas Extras</p>
+            <h3 className="text-lg font-black text-amber-900">{formattedTotal}</h3>
+            <p className="text-[10px] text-amber-600">Após as 17h00</p>
+          </div>
+        </div>
       </div>
 
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
@@ -2046,35 +2162,48 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
                 <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Tipo</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Data</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Hora</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider col-overtime">Hora Extra</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Localização</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {logs.length > 0 ? logs.map((log) => (
-                <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-6 py-4">
-                    <span className={cn(
-                      "px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider",
-                      log.type === 'in' ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
-                    )}>
-                      {log.type === 'in' ? 'Entrada' : 'Saída'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-slate-600">
-                    {log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy') : '--/--/----'}
-                  </td>
-                  <td className="px-6 py-4 font-bold text-slate-900">
-                    {log.timestamp ? format(log.timestamp.toDate(), 'HH:mm:ss') : '--:--:--'}
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-1 text-xs text-slate-400">
-                      <MapPin size={14} /> {log.location.latitude.toFixed(4)}, {log.location.longitude.toFixed(4)}
-                    </div>
-                  </td>
-                </tr>
-              )) : (
+              {logs.length > 0 ? logs.map((log) => {
+                const otMin = getOvertimeMinutes(log);
+                return (
+                  <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="px-6 py-4">
+                      <span className={cn(
+                        "px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider",
+                        log.type === 'in' ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
+                      )}>
+                        {log.type === 'in' ? 'Entrada' : 'Saída'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-slate-600">
+                      {log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy') : '--/--/----'}
+                    </td>
+                    <td className="px-6 py-4 font-bold text-slate-900">
+                      {log.timestamp ? format(log.timestamp.toDate(), 'HH:mm:ss') : '--:--:--'}
+                    </td>
+                    <td className="px-6 py-4 text-sm font-semibold">
+                      {log.type === 'out' && otMin > 0 ? (
+                        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100/60 text-amber-700 border border-amber-200">
+                          +{formatOvertime(otMin)}
+                        </span>
+                      ) : (
+                        <span className="text-slate-300 text-xs">-</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-1 text-xs text-slate-400">
+                        <MapPin size={14} /> {log.location.latitude.toFixed(4)}, {log.location.longitude.toFixed(4)}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              }) : (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-slate-400">Nenhum registro encontrado.</td>
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-400">Nenhum registro encontrado.</td>
                 </tr>
               )}
             </tbody>
