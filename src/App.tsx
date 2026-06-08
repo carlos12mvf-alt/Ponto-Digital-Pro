@@ -1457,6 +1457,15 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
       return;
     }
 
+    const totalRawOvertime = filteredLogs.reduce((sum, log) => sum + getOvertimeMinutes(log), 0);
+    const totalDelays = filteredLogs.reduce((sum, log) => sum + getDelayMinutes(log), 0);
+    const netBalance = totalRawOvertime - totalDelays;
+
+    const formattedRaw = formatOvertime(totalRawOvertime) || '0h 0m';
+    const formattedDelays = formatOvertime(totalDelays) || '0h 0m';
+    const formattedTotal = formatOvertime(Math.abs(netBalance)) || '0h 0m';
+    const signPrefix = netBalance >= 0 ? '+' : '-';
+
     const selectedUser = users.find(u => u.uid === selectedUserId);
 
     // Header
@@ -1496,14 +1505,79 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
       headStyles: { fillColor: [79, 70, 229] },
     });
 
-    // Add explanatory bank of hours report and Virtual Signature
+    // Add total report summary
     let startY = (doc as any).lastAutoTable?.finalY || 100;
-    if (startY > 160) {
+    if (startY > 150) {
       doc.addPage();
       startY = 20;
     } else {
-      startY = startY + 15;
+      startY = startY + 12;
     }
+
+    doc.setFontSize(11);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(30, 41, 59); // slate-800
+    doc.text('RESUMO DO BANCO DE HORAS', 14, startY);
+
+    const boxWidth = 58;
+    const boxHeight = 22;
+    const spacing = 4;
+    
+    // 1. Horas Extras Box
+    doc.setFillColor(240, 253, 250); // teal-50
+    doc.rect(14, startY + 4, boxWidth, boxHeight, 'F');
+    doc.setDrawColor(204, 251, 241); // teal-100
+    doc.rect(14, startY + 4, boxWidth, boxHeight, 'D');
+    doc.setFontSize(7.5);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(15, 118, 110); // teal-700
+    doc.text('HORAS EXTRAS (+)', 18, startY + 11);
+    doc.setFontSize(11);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(15, 118, 110);
+    doc.text(formattedRaw, 18, startY + 19);
+
+    // 2. Horas Devidas / Atrasos Box
+    doc.setFillColor(254, 242, 242); // red-50
+    doc.rect(14 + boxWidth + spacing, startY + 4, boxWidth, boxHeight, 'F');
+    doc.setDrawColor(254, 226, 226); // red-100
+    doc.rect(14 + boxWidth + spacing, startY + 4, boxWidth, boxHeight, 'D');
+    doc.setFontSize(7.5);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(185, 28, 28); // red-700
+    doc.text('ATRASOS DEVIDO (-)', 14 + boxWidth + spacing + 4, startY + 11);
+    doc.setFontSize(11);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(185, 28, 28);
+    doc.text(formattedDelays, 14 + boxWidth + spacing + 4, startY + 19);
+
+    // 3. Saldo Líquido Box
+    const isPositive = netBalance >= 0;
+    if (isPositive) {
+      doc.setFillColor(240, 253, 244); // Green-50
+      doc.setDrawColor(220, 252, 231); // Green-100
+    } else {
+      doc.setFillColor(255, 241, 242); // Rose-50
+      doc.setDrawColor(255, 228, 230); // Rose-100
+    }
+    doc.rect(14 + (boxWidth + spacing) * 2, startY + 4, boxWidth, boxHeight, 'F');
+    doc.rect(14 + (boxWidth + spacing) * 2, startY + 4, boxWidth, boxHeight, 'D');
+    doc.setFontSize(7.5);
+    doc.setFont('Helvetica', 'bold');
+    
+    const metricR = isPositive ? 21 : 225;
+    const metricG = isPositive ? 128 : 29;
+    const metricB = isPositive ? 61 : 72;
+    
+    doc.setTextColor(metricR, metricG, metricB);
+    doc.text('SALDO FINAL', 14 + (boxWidth + spacing) * 2 + 4, startY + 11);
+    doc.setFontSize(11);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(metricR, metricG, metricB);
+    doc.text(`${signPrefix}${formattedTotal}`, 14 + (boxWidth + spacing) * 2 + 4, startY + 19);
+
+    // Update startY for the next section (Parecer Explicativo Box)
+    startY = startY + boxHeight + 11;
 
     // 1. Relatório Explicativo Box
     doc.setFillColor(248, 250, 252); // slate-50
@@ -2933,13 +3007,80 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
       headStyles: { fillColor: [79, 70, 229] },
     });
 
+    // Add total report summary
     let startY = (doc as any).lastAutoTable?.finalY || 100;
-    if (startY > 160) {
+    if (startY > 150) {
       doc.addPage();
       startY = 20;
     } else {
-      startY = startY + 15;
+      startY = startY + 12;
     }
+
+    doc.setFontSize(11);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(30, 41, 59); // slate-800
+    doc.text('RESUMO DO BANCO DE HORAS', 14, startY);
+
+    const boxWidth = 58;
+    const boxHeight = 22;
+    const spacing = 4;
+    const signPrefix = netBalance >= 0 ? '+' : '-';
+    
+    // 1. Horas Extras Box
+    doc.setFillColor(240, 253, 250); // teal-50
+    doc.rect(14, startY + 4, boxWidth, boxHeight, 'F');
+    doc.setDrawColor(204, 251, 241); // teal-100
+    doc.rect(14, startY + 4, boxWidth, boxHeight, 'D');
+    doc.setFontSize(7.5);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(15, 118, 110); // teal-700
+    doc.text('HORAS EXTRAS (+)', 18, startY + 11);
+    doc.setFontSize(11);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(15, 118, 110);
+    doc.text(formattedRaw, 18, startY + 19);
+
+    // 2. Horas Devidas / Atrasos Box
+    doc.setFillColor(254, 242, 242); // red-50
+    doc.rect(14 + boxWidth + spacing, startY + 4, boxWidth, boxHeight, 'F');
+    doc.setDrawColor(254, 226, 226); // red-100
+    doc.rect(14 + boxWidth + spacing, startY + 4, boxWidth, boxHeight, 'D');
+    doc.setFontSize(7.5);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(185, 28, 28); // red-700
+    doc.text('ATRASOS DEVIDO (-)', 14 + boxWidth + spacing + 4, startY + 11);
+    doc.setFontSize(11);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(185, 28, 28);
+    doc.text(formattedDelays, 14 + boxWidth + spacing + 4, startY + 19);
+
+    // 3. Saldo Líquido Box
+    const isPositive = netBalance >= 0;
+    if (isPositive) {
+      doc.setFillColor(240, 253, 244); // Green-50
+      doc.setDrawColor(220, 252, 231); // Green-100
+    } else {
+      doc.setFillColor(255, 241, 242); // Rose-50
+      doc.setDrawColor(255, 228, 230); // Rose-100
+    }
+    doc.rect(14 + (boxWidth + spacing) * 2, startY + 4, boxWidth, boxHeight, 'F');
+    doc.rect(14 + (boxWidth + spacing) * 2, startY + 4, boxWidth, boxHeight, 'D');
+    doc.setFontSize(7.5);
+    doc.setFont('Helvetica', 'bold');
+    
+    const metricR = isPositive ? 21 : 225;
+    const metricG = isPositive ? 128 : 29;
+    const metricB = isPositive ? 61 : 72;
+    
+    doc.setTextColor(metricR, metricG, metricB);
+    doc.text('SALDO FINAL', 14 + (boxWidth + spacing) * 2 + 4, startY + 11);
+    doc.setFontSize(11);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(metricR, metricG, metricB);
+    doc.text(`${signPrefix}${formattedTotal}`, 14 + (boxWidth + spacing) * 2 + 4, startY + 19);
+
+    // Update startY for the next section (Parecer Explicativo Box)
+    startY = startY + boxHeight + 11;
 
     // 1. Relatório Explicativo Box
     doc.setFillColor(248, 250, 252);
