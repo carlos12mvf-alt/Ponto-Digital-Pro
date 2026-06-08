@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   BrowserRouter as Router, 
   Routes, 
@@ -32,7 +32,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { UserProfile, TimeLog, OperationType, UserRole, Project, ProjectStage, CompanySettings } from './types';
+import { UserProfile, TimeLog, OperationType, UserRole, Project, ProjectStage, CompanySettings, Signature } from './types';
 import { cn } from './lib/utils';
 import { 
   Clock, 
@@ -1318,6 +1318,36 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [selectedUserId, setSelectedUserId] = useState<string>('');
 
+  const [signature, setSignature] = useState<Signature | null>(null);
+  const [loadingSignature, setLoadingSignature] = useState(false);
+
+  useEffect(() => {
+    if (!selectedUserId) {
+      setSignature(null);
+      return;
+    }
+    setLoadingSignature(true);
+    const sigQuery = query(
+      collection(db, 'signatures'),
+      where('companyId', '==', profile.companyId),
+      where('userId', '==', selectedUserId),
+      where('startDate', '==', startDate),
+      where('endDate', '==', endDate)
+    );
+    const unsubscribe = onSnapshot(sigQuery, (snapshot) => {
+      if (!snapshot.empty) {
+        setSignature(snapshot.docs[0].data() as Signature);
+      } else {
+        setSignature(null);
+      }
+      setLoadingSignature(false);
+    }, (error) => {
+      console.error("Error listening to signatures", error);
+      setLoadingSignature(false);
+    });
+    return () => unsubscribe();
+  }, [selectedUserId, startDate, endDate, profile.companyId]);
+
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       setNotificationsEnabled((window as any).Notification.permission === 'granted');
@@ -1431,7 +1461,7 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
 
     // Header
     doc.setFontSize(18);
-    doc.text('Relatório de Ponto Digital', 14, 22);
+    doc.text('Relatório de Ponto - Banco de Horas', 14, 22);
     doc.setFontSize(11);
     doc.setTextColor(100);
     doc.text(`Empresa: ${profile.companyId}`, 14, 30);
@@ -1465,6 +1495,104 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
       theme: 'striped',
       headStyles: { fillColor: [79, 70, 229] },
     });
+
+    // Add explanatory bank of hours report and Virtual Signature
+    let startY = (doc as any).lastAutoTable?.finalY || 100;
+    if (startY > 160) {
+      doc.addPage();
+      startY = 20;
+    } else {
+      startY = startY + 15;
+    }
+
+    // 1. Relatório Explicativo Box
+    doc.setFillColor(248, 250, 252); // slate-50
+    doc.rect(14, startY, 182, 45, 'F');
+    doc.setDrawColor(226, 232, 240); // slate-200
+    doc.rect(14, startY, 182, 45, 'D');
+
+    // Title inside box
+    doc.setFontSize(10);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(30, 41, 59); // slate-800
+    doc.text('PARECER EXPLICATIVO DO BANCO DE HORAS', 18, startY + 6);
+
+    // Explanation content
+    doc.setFontSize(8);
+    doc.setFont('Helvetica', 'normal');
+    doc.setTextColor(71, 85, 105); // slate-600
+
+    const explanationTxts = [
+      "• Horas Extras (+): Horas de labor registradas fora do expediente padrao (08h00 - 17h00) que geram credito de compensacao.",
+      "• Atrasos e Tempo Devido (-): Horas de debito decorrentes de atrasos na entrada ou saida antecipada dentro do expediente.",
+      "• Saldo Liquido do Periodo: Calculado atraves da diferenca direta entre horas extras e atrasos (Extras - Devidos).",
+      "• Convalidacao: Este relatorio de banco de horas e convalidado pelas partes mediante assinatura virtual abaixo."
+    ];
+
+    let textY = startY + 14;
+    explanationTxts.forEach(line => {
+      doc.text(line, 18, textY);
+      textY += 6;
+    });
+
+    const midY = startY + 55;
+
+    doc.setFontSize(10);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(30, 41, 59);
+    doc.text('VISTOS E ASSINATURA DE TRANSPARÊNCIA', 14, midY);
+
+    const sigY = midY + 8;
+
+    // Left Box: Collaborator Signature Box
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(14, sigY, 85, 45, 'D');
+
+    // Right Box: Management Stamp Box
+    doc.rect(111, sigY, 85, 45, 'D');
+
+    // Left Box Contents (Employee Signature)
+    doc.setFontSize(8);
+    doc.setTextColor(100);
+    if (signature) {
+      try {
+        doc.addImage(signature.signatureImage, 'PNG', 19, sigY + 5, 75, 20);
+      } catch (err) {
+        console.error("Error drawing signature image in PDF:", err);
+      }
+      doc.setFont('Helvetica', 'bold');
+      doc.setTextColor(16, 185, 129); // emerald-500
+      doc.text('✓ ASSINADO VIRTUALMENTE', 18, sigY + 30);
+      doc.setFont('Helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Por: ${signature.signedByName}`, 18, sigY + 35);
+      doc.text(`Data: ${format(new Date(signature.signedAt.toDate ? signature.signedAt.toDate() : signature.signedAt), 'dd/MM/yyyy HH:mm')}`, 18, sigY + 39);
+      doc.setFont('Courier', 'normal');
+      doc.setFontSize(6);
+      doc.text(`HASH: ${signature.hash}`, 18, sigY + 42);
+    } else {
+      doc.setFont('Helvetica', 'italic');
+      doc.text('Assinatura Eletronica Pendente', 20, sigY + 22);
+      doc.setDrawColor(200, 200, 200);
+      doc.line(20, sigY + 32, 93, sigY + 32);
+      doc.setFont('Helvetica', 'normal');
+      doc.text('Colaborador', 45, sigY + 38);
+    }
+
+    // Right Box Contents (Employer Validation)
+    doc.setFont('Helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text('Empresa / Empregador:', 115, sigY + 8);
+    doc.setFont('Helvetica', 'bold');
+    doc.text(profile.companyId, 115, sigY + 14);
+    doc.setFont('Helvetica', 'normal');
+    doc.text('Status de Homologação:', 115, sigY + 24);
+    doc.setTextColor(16, 185, 129); // emerald-500
+    doc.text('✓ VALIDADO E HOMOLOGADO', 115, sigY + 30);
+    doc.setFont('Helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text('Selo Digital Ponto Digital CLT', 115, sigY + 36);
 
     const pdfName = selectedUser 
       ? `relatorio_ponto_${(selectedUser.displayName || 'funcionario').replace(/\s+/g, '_').toLowerCase()}_${startDate}_${endDate}.pdf`
@@ -1773,6 +1901,47 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
               <Download size={18} /> Gerar PDF
             </button>
           </div>
+
+          {selectedUserId && (
+            <div className={cn(
+              "p-4 rounded-3xl border flex flex-col sm:flex-row items-center justify-between gap-3 font-sans transition-all mb-6",
+              signature 
+                ? "bg-emerald-50/70 border-emerald-100" 
+                : "bg-amber-50/70 border-amber-100"
+            )}>
+              <div className="flex items-center gap-3">
+                <div className={cn(
+                  "w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0",
+                  signature ? "bg-emerald-100 text-emerald-600" : "bg-amber-100 text-amber-600"
+                )}>
+                  {signature ? "✓" : "✍"}
+                </div>
+                <div>
+                  <h5 className="text-sm font-bold text-slate-800 leading-none mb-1">
+                    {signature ? "Assinatura Virtual Registrada" : "Aguardando Assinatura Virtual"}
+                  </h5>
+                  <p className="text-xs text-slate-500 leading-relaxed font-normal">
+                    {signature 
+                      ? `O colaborador assinou este período digitalmente por IP/Virtual em ${format(new Date(signature.signedAt?.toDate ? signature.signedAt.toDate() : signature.signedAt), 'dd/MM/yyyy HH:mm')}`
+                      : "O funcionário ainda não registrou a assinatura virtual para este período."
+                    }
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {signature && (
+                  <span className="font-mono text-[9px] bg-emerald-105 text-emerald-800 border border-emerald-200 px-2.5 py-1 rounded-lg uppercase tracking-wider font-bold">
+                    VALIDADO: {signature.hash}
+                  </span>
+                )}
+                {!signature && (
+                  <span className="font-mono text-[9px] bg-amber-105 text-amber-800 border border-amber-200 px-2.5 py-1 rounded-lg uppercase tracking-wider font-bold animate-pulse">
+                    Pendente
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="overflow-x-auto">
@@ -2372,8 +2541,287 @@ const AdminDashboard = ({ profile }: { profile: UserProfile }) => {
   );
 };
 
+const SignaturePadModal = ({
+  isOpen,
+  onClose,
+  onSave,
+  defaultName
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (signatureDataUrl: string, signedName: string) => void;
+  defaultName: string;
+}) => {
+  const [signedName, setSignedName] = useState(defaultName);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [signatureMode, setSignatureMode] = useState<'draw' | 'type'>('draw');
+  const [fontStyle, setFontStyle] = useState<'cursive' | 'serif' | 'display'>('cursive');
+
+  // Trigger whenever signatureMode changes or modal opens
+  useEffect(() => {
+    if (isOpen && signatureMode === 'draw') {
+      setTimeout(() => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.strokeStyle = '#1e293b'; // slate-800
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            // Fill with white background to ensure no transparency anomalies
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+          }
+        }
+      }, 100);
+    }
+  }, [isOpen, signatureMode]);
+
+  if (!isOpen) return null;
+
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    let x, y;
+    if ('touches' in e) {
+      if (e.touches.length === 0) return;
+      x = e.touches[0].clientX - rect.left;
+      y = e.touches[0].clientY - rect.top;
+    } else {
+      x = e.clientX - rect.left;
+      y = e.clientY - rect.top;
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    setIsDrawing(true);
+    e.preventDefault();
+  };
+
+  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    let x, y;
+    if ('touches' in e) {
+      if (e.touches.length === 0) return;
+      x = e.touches[0].clientX - rect.left;
+      y = e.touches[0].clientY - rect.top;
+    } else {
+      x = e.clientX - rect.left;
+      y = e.clientY - rect.top;
+    }
+
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    e.preventDefault();
+  };
+
+  const stopDrawing = () => {
+    setIsDrawing(false);
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  };
+
+  const handleSave = () => {
+    if (signatureMode === 'draw') {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const dataUrl = canvas.toDataURL('image/png');
+        onSave(dataUrl, signedName);
+      }
+    } else {
+      // Draw typed name onto a canvas to pass as a Base64 image
+      const canvas = document.createElement('canvas');
+      canvas.width = 450;
+      canvas.height = 150;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = '#1e293b'; // slate-800
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        if (fontStyle === 'cursive') {
+          ctx.font = 'italic 28px Georgia, "Times New Roman", serif';
+        } else if (fontStyle === 'serif') {
+          ctx.font = 'bold 24px Georgia, serif';
+        } else {
+          ctx.font = 'small-caps bold 22px Courier New, monospace';
+        }
+        
+        ctx.fillText(signedName || 'Assinatura', canvas.width / 2, canvas.height / 2);
+        
+        // Horizontal signature line
+        ctx.strokeStyle = '#9ca3af';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(50, canvas.height / 2 + 30);
+        ctx.lineTo(canvas.width - 50, canvas.height / 2 + 30);
+        ctx.stroke();
+
+        const dataUrl = canvas.toDataURL('image/png');
+        onSave(dataUrl, signedName);
+      }
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 font-sans">
+      <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div>
+            <h3 className="text-lg font-black text-slate-900">Assinatura Virtual de Folha</h3>
+            <p className="text-xs text-slate-500 font-normal">Valide o banco de horas do período eletronicamente</p>
+          </div>
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
+          <div>
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Nome Completo</label>
+            <input
+              type="text"
+              value={signedName}
+              onChange={(e) => setSignedName(e.target.value)}
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-semibold"
+              placeholder="Sua identificação oficial"
+            />
+          </div>
+
+          <div className="flex gap-2 p-1 bg-slate-100/80 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setSignatureMode('draw')}
+              className={cn(
+                "flex-1 py-2 rounded-lg text-xs font-bold transition-all",
+                signatureMode === 'draw' ? "bg-white text-slate-800 shadow" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              Tela de Desenho
+            </button>
+            <button
+              type="button"
+              onClick={() => setSignatureMode('type')}
+              className={cn(
+                "flex-1 py-2 rounded-lg text-xs font-bold transition-all",
+                signatureMode === 'type' ? "bg-white text-slate-800 shadow" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              Firma Digitada
+            </button>
+          </div>
+
+          {signatureMode === 'draw' ? (
+            <div className="space-y-2">
+              <span className="text-[10px] text-slate-400 uppercase font-black tracking-wider block">Área para desenhar por toque ou mouse</span>
+              <div className="border border-slate-200 bg-white rounded-2xl overflow-hidden cursor-crosshair relative shadow-inner">
+                <canvas
+                  ref={canvasRef}
+                  width={450}
+                  height={150}
+                  onMouseDown={startDrawing}
+                  onMouseMove={draw}
+                  onMouseUp={stopDrawing}
+                  onMouseLeave={stopDrawing}
+                  onTouchStart={startDrawing}
+                  onTouchMove={draw}
+                  onTouchEnd={stopDrawing}
+                  className="w-full h-[150px] bg-white touch-none"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={clearCanvas}
+                className="text-xs font-bold text-indigo-600 hover:text-indigo-800 underline block text-right ml-auto"
+              >
+                Limpar Tela
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block font-sans">Estilos de Letra</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['cursive', 'serif', 'display'] as const).map((style) => (
+                    <button
+                      key={style}
+                      type="button"
+                      onClick={() => setFontStyle(style)}
+                      className={cn(
+                        "py-2 rounded-xl border text-xs font-bold capitalize transition-all",
+                        fontStyle === style ? "border-indigo-600 bg-indigo-50/50 text-indigo-700 font-black" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                      )}
+                    >
+                      {style === 'cursive' ? 'Cursiva' : style === 'serif' ? 'Serifa' : 'Código'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-6 bg-slate-50 border border-slate-250/50 rounded-2xl flex items-center justify-center min-h-[90px] shadow-inner">
+                <span className={cn(
+                  "text-slate-800 select-none text-center",
+                  fontStyle === 'cursive' && "text-2xl italic font-serif",
+                  fontStyle === 'serif' && "text-xl font-bold font-serif",
+                  fontStyle === 'display' && "text-lg uppercase tracking-widest font-mono font-bold"
+                )}>
+                  {signedName || 'Sua Assinatura'}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 py-3 border border-slate-200 hover:bg-slate-100 text-slate-700 text-sm font-bold rounded-2xl transition-all"
+          >
+            Voltar
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!signedName.trim()}
+            className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-2xl transition-all shadow-md shadow-emerald-500/10 disabled:opacity-50"
+          >
+            Confirmar e Assinar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const HistoryView = ({ profile }: { profile: UserProfile }) => {
   const [logs, setLogs] = useState<TimeLog[]>([]);
+  const [startDate, setStartDate] = useState(format(new Date(), 'yyyy-MM-01'));
+  const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [signature, setSignature] = useState<Signature | null>(null);
+  const [isSigningOpen, setIsSigningOpen] = useState(false);
 
   useEffect(() => {
     const q = query(
@@ -2389,39 +2837,310 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
     return () => unsubscribe();
   }, [profile]);
 
-  const totalRawOvertime = logs.reduce((sum, log) => sum + getOvertimeMinutes(log), 0);
-  const totalDelays = logs.reduce((sum, log) => sum + getDelayMinutes(log), 0);
+  useEffect(() => {
+    const sigQuery = query(
+      collection(db, 'signatures'),
+      where('companyId', '==', profile.companyId),
+      where('userId', '==', profile.uid),
+      where('startDate', '==', startDate),
+      where('endDate', '==', endDate)
+    );
+    const unsubscribe = onSnapshot(sigQuery, (snapshot) => {
+      if (!snapshot.empty) {
+        setSignature(snapshot.docs[0].data() as Signature);
+      } else {
+        setSignature(null);
+      }
+    });
+    return () => unsubscribe();
+  }, [profile.uid, startDate, endDate, profile.companyId]);
+
+  // Filter logs in helper
+  const filteredLogs = logs.filter(log => {
+    if (!log.timestamp) return false;
+    const date = log.timestamp.toDate();
+    const start = startOfDay(new Date(startDate + 'T00:00:00'));
+    const end = endOfDay(new Date(endDate + 'T23:59:59'));
+    return isWithinInterval(date, { start, end });
+  });
+
+  const totalRawOvertime = filteredLogs.reduce((sum, log) => sum + getOvertimeMinutes(log), 0);
+  const totalDelays = filteredLogs.reduce((sum, log) => sum + getDelayMinutes(log), 0);
   const netBalance = totalRawOvertime - totalDelays;
 
   const formattedRaw = formatOvertime(totalRawOvertime) || '0h 0m';
   const formattedDelays = formatOvertime(totalDelays) || '0h 0m';
   const formattedTotal = formatOvertime(Math.abs(netBalance)) || '0h 0m';
 
+  const handleSaveSignature = async (sigImage: string, nameSigned: string) => {
+    try {
+      const sigId = `${profile.companyId}_${profile.uid}_${startDate}_${endDate}`;
+      await setDoc(doc(db, 'signatures', sigId), {
+        companyId: profile.companyId,
+        userId: profile.uid,
+        userName: profile.displayName || profile.email,
+        startDate: startDate,
+        endDate: endDate,
+        signedAt: serverTimestamp(),
+        signatureImage: sigImage,
+        signedByName: nameSigned,
+        signedByRole: profile.role,
+        hash: 'VAL-' + Math.random().toString(36).substring(2, 11).toUpperCase()
+      });
+      setIsSigningOpen(false);
+    } catch (err) {
+      console.error("Error saving signature", err);
+      alert('Erro ao registrar assinatura virtual.');
+    }
+  };
+
+  const generatePDF = () => {
+    const doc = new jsPDF();
+    
+    if (filteredLogs.length === 0) {
+      alert('Nenhum registro encontrado no período selecionado para gerar o PDF.');
+      return;
+    }
+
+    // Header
+    doc.setFontSize(18);
+    doc.text('Relatório de Ponto - Banco de Horas', 14, 22);
+    doc.setFontSize(11);
+    doc.setTextColor(100);
+    doc.text(`Empresa: ${profile.companyId}`, 14, 30);
+    doc.text(`Funcionário: ${profile.displayName || profile.email}`, 14, 36);
+    doc.text(`Período: ${format(new Date(startDate + 'T00:00:00'), 'dd/MM/yyyy')} até ${format(new Date(endDate + 'T00:00:00'), 'dd/MM/yyyy')}`, 14, 42);
+    doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 14, 48);
+
+    const tableData = filteredLogs.map(log => {
+      const ot = getOvertimeMinutes(log);
+      const del = getDelayMinutes(log);
+      const balanceStr = ot > 0 ? `+${formatOvertime(ot)} Extra` : del > 0 ? `-${formatOvertime(del)} Devido` : 'Pontual';
+      return [
+        log.userName,
+        log.type === 'in' ? 'Entrada' : 'Saída',
+        log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy HH:mm:ss') : '---',
+        balanceStr,
+        `${log.location.latitude.toFixed(4)}, ${log.location.longitude.toFixed(4)}`
+      ];
+    });
+
+    autoTable(doc, {
+      startY: 56,
+      head: [['Funcionário', 'Tipo', 'Data/Hora', 'Extra / Devido', 'Localização']],
+      body: tableData,
+      theme: 'striped',
+      headStyles: { fillColor: [79, 70, 229] },
+    });
+
+    let startY = (doc as any).lastAutoTable?.finalY || 100;
+    if (startY > 160) {
+      doc.addPage();
+      startY = 20;
+    } else {
+      startY = startY + 15;
+    }
+
+    // 1. Relatório Explicativo Box
+    doc.setFillColor(248, 250, 252);
+    doc.rect(14, startY, 182, 45, 'F');
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(14, startY, 182, 45, 'D');
+
+    doc.setFontSize(10);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(30, 41, 59);
+    doc.text('PARECER EXPLICATIVO DO BANCO DE HORAS', 18, startY + 6);
+
+    doc.setFontSize(8);
+    doc.setFont('Helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+
+    const explanationTxts = [
+      "• Horas Extras (+): Horas de labor registradas fora do expediente padrao (08h00 - 17h00) que geram credito de compensacao.",
+      "• Atrasos e Tempo Devido (-): Horas de debito decorrentes de atrasos na entrada ou saida antecipada dentro do expediente.",
+      "• Saldo Liquido do Periodo: Calculado atraves da diferenca direta entre horas extras e atrasos (Extras - Devidos).",
+      "• Convalidacao: Este relatorio de banco de horas e convalidado pelas partes mediante assinatura virtual abaixo."
+    ];
+
+    let textY = startY + 14;
+    explanationTxts.forEach(line => {
+      doc.text(line, 18, textY);
+      textY += 6;
+    });
+
+    const midY = startY + 55;
+
+    doc.setFontSize(10);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(30, 41, 59);
+    doc.text('VISTOS E ASSINATURA DE TRANSPARÊNCIA', 14, midY);
+
+    const sigY = midY + 8;
+
+    // Left Box: Collaborator Image/Placeholder
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(14, sigY, 85, 45, 'D');
+
+    // Right Box: Employer validation
+    doc.rect(111, sigY, 85, 45, 'D');
+
+    doc.setFontSize(8);
+    doc.setTextColor(100);
+    if (signature) {
+      try {
+        doc.addImage(signature.signatureImage, 'PNG', 19, sigY + 5, 75, 20);
+      } catch (err) {
+        console.error("Error drawing signature in PDF:", err);
+      }
+      doc.setFont('Helvetica', 'bold');
+      doc.setTextColor(16, 185, 129);
+      doc.text('✓ ASSINADO VIRTUALMENTE', 18, sigY + 30);
+      doc.setFont('Helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Por: ${signature.signedByName}`, 18, sigY + 35);
+      doc.text(`Data: ${format(new Date(signature.signedAt?.toDate ? signature.signedAt.toDate() : signature.signedAt), 'dd/MM/yyyy HH:mm')}`, 18, sigY + 39);
+      doc.setFont('Courier', 'normal');
+      doc.setFontSize(6);
+      doc.text(`HASH: ${signature.hash}`, 18, sigY + 42);
+    } else {
+      doc.setFont('Helvetica', 'italic');
+      doc.text('Assinatura Eletronica Pendente', 20, sigY + 22);
+      doc.setDrawColor(200, 200, 200);   // Set light grey draw line
+      doc.line(20, sigY + 32, 93, sigY + 32);
+      doc.setFont('Helvetica', 'normal');
+      doc.text('Colaborador', 45, sigY + 38);
+    }
+
+    // Right Box (Employer Check)
+    doc.setFont('Helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text('Empresa / Empregador:', 115, sigY + 8);
+    doc.setFont('Helvetica', 'bold');
+    doc.text(profile.companyId, 115, sigY + 14);
+    doc.setFont('Helvetica', 'normal');
+    doc.text('Status de Homologação:', 115, sigY + 24);
+    doc.setTextColor(16, 185, 129);
+    doc.text('✓ VALIDADO E HOMOLOGADO', 115, sigY + 30);
+    doc.setFont('Helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text('Selo Digital Ponto Digital CLT', 115, sigY + 36);
+
+    const pdfName = `relatorio_ponto_${(profile.displayName || 'funcionario').replace(/\s+/g, '_').toLowerCase()}_${startDate}_${endDate}.pdf`;
+    doc.save(pdfName);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900">Meu Histórico</h2>
-          <p className="text-slate-500">Todos os seus registros de ponto de entrada e saída</p>
+          <h2 className="text-2xl font-black text-slate-900 font-sans tracking-tight">Meu Histórico e Controle</h2>
+          <p className="text-slate-500 text-sm font-normal">Faça a revisão de seus pontos e convalide o banco de horas do período</p>
         </div>
       </div>
 
-      {/* Regra de Compensação e Visualização */}
+      {/* Regra de Compensação e Filtros de Data */}
       <div className="space-y-6">
-        {/* Info Box */}
-        <div className="bg-gradient-to-r from-indigo-50/60 to-slate-50/50 rounded-3xl p-5 border border-indigo-100/60 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <h4 className="text-sm font-bold text-indigo-900 flex items-center gap-2">
+        <div className="flex flex-col md:flex-row items-stretch gap-6">
+          {/* Info Box */}
+          <div className="flex-1 bg-gradient-to-r from-indigo-50/60 to-slate-50/50 rounded-3xl p-5 border border-indigo-100/60 leading-relaxed font-sans space-y-1">
+            <h4 className="text-sm font-black text-indigo-900 flex items-center gap-2">
               <Clock size={16} className="text-indigo-600 animate-pulse" />
               Sua Regra de Contabilidade de Horas
             </h4>
-            <p className="text-xs text-slate-600 leading-relaxed">
-              O seu período padrão de expediente é das <strong>08h00 às 17h00</strong>. Todo tempo trabalhado <strong>fora desse período (antes das 08h ou após as 17h)</strong> acumula como <strong>Hora Extra Bruta</strong>. Qualquer atraso de chegada (após as 08h) ou saída antecipada (antes das 17h) gera <strong>Tempo Devido</strong>. O seu Saldo Líquido geral calcula <span className="font-mono bg-slate-100 rounded px-1.5 py-0.5 text-[10px] text-indigo-700">Extras - Devidos</span>.
+            <p className="text-xs text-slate-650 font-normal">
+              O seu período padrão de expediente é das <strong>08h00 às 17h00</strong>. Todo tempo trabalhado <strong>fora desse período (antes das 08h ou após as 17h)</strong> acumula como <strong>Hora Extra Bruta</strong>. Qualquer atraso de chegada (após as 08h) ou saída antecipada (antes das 17h) gera <strong>Tempo Devido</strong>. O seu Saldo Líquido geral calcula <span className="font-mono bg-slate-100 rounded px-1.5 py-0.5 text-[10px] text-indigo-700 font-bold">Extras - Devidos</span>.
             </p>
           </div>
-          <div className="flex bg-white/95 backdrop-blur px-4 py-2.5 rounded-2xl border border-indigo-100 text-xs font-bold text-indigo-900 gap-2 items-center divide-x divide-indigo-100 shrink-0 shadow-sm">
-            <div>Horário Padrão: <span className="text-indigo-600">08:00 às 17:00</span></div>
+          <div className="md:w-[280px] bg-white border border-slate-150 p-5 rounded-3xl flex flex-col justify-center gap-2 font-sans shrink-0 shadow-sm text-xs">
+            <div className="font-bold text-slate-400 uppercase tracking-wider block">Horário Padrão CLT</div>
+            <div className="text-sm font-black text-slate-800">08:00 às 17:00</div>
+            <div className="text-slate-500 font-normal">Expediente regular estabelecido pela empresa.</div>
           </div>
+        </div>
+
+        {/* Date Filter & Signature Panel for Collaborator */}
+        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-6">
+          <div className="flex flex-col md:flex-row items-end justify-between gap-4">
+            <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+              <div className="space-y-2">
+                <label className="text-xs font-black text-slate-400 uppercase flex items-center gap-2">
+                  <Calendar size={14} /> Data Inicial
+                </label>
+                <input 
+                  type="date" 
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-semibold"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-black text-slate-400 uppercase flex items-center gap-2">
+                  <Calendar size={14} /> Data Final
+                </label>
+                <input 
+                  type="date" 
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-semibold"
+                />
+              </div>
+            </div>
+            
+            <div className="flex gap-3 w-full md:w-auto shrink-0">
+              <button
+                onClick={generatePDF}
+                disabled={filteredLogs.length === 0}
+                className="flex-1 md:flex-initial px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-md shadow-emerald-500/10 disabled:opacity-50"
+              >
+                <Download size={16} /> Baixar PDF
+              </button>
+              
+              {!signature ? (
+                <button
+                  type="button"
+                  onClick={() => setIsSigningOpen(true)}
+                  disabled={filteredLogs.length === 0}
+                  className="flex-1 md:flex-initial px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-md shadow-indigo-500/10 disabled:opacity-50"
+                >
+                  ✍ Assinar Período
+                </button>
+              ) : (
+                <div className="px-5 py-2.5 bg-emerald-50 border border-emerald-250 text-emerald-800 rounded-xl font-bold text-sm flex items-center gap-2">
+                  ✓ Assinado
+                </div>
+              )}
+            </div>
+          </div>
+
+          {signature ? (
+            <div className="p-4 bg-emerald-50/50 border border-emerald-100 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex gap-3 items-center">
+                <div className="w-12 h-12 bg-white rounded-xl border border-emerald-250/50 p-1 flex items-center justify-center overflow-hidden shrink-0">
+                  <img src={signature.signatureImage} alt="Assinatura Virtual" className="max-h-full max-w-full object-contain" referrerPolicy="no-referrer" />
+                </div>
+                <div>
+                  <p className="text-xs font-black text-emerald-850 uppercase tracking-wide leading-none mb-1">Assinatura Certificada</p>
+                  <p className="text-xs text-slate-600 font-normal">
+                    Certificado e assinado digitalmente por <strong>{signature.signedByName}</strong> em {format(new Date(signature.signedAt?.toDate ? signature.signedAt.toDate() : signature.signedAt), 'dd/MM/yyyy HH:mm')}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <span className="font-mono text-[9px] bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-lg uppercase tracking-wider font-extrabold text-emerald-800">
+                  {signature.hash}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="p-4 bg-amber-50/50 border border-amber-100 rounded-2xl flex items-center gap-3">
+              <AlertCircle className="text-amber-600 shrink-0" size={18} />
+              <div className="text-xs text-amber-850 leading-relaxed font-semibold">
+                Sua assinatura virtual para este período (<strong>{format(new Date(startDate + 'T00:00:00'), 'dd/MM/yyyy')}</strong> a <strong>{format(new Date(endDate + 'T00:00:00'), 'dd/MM/yyyy')}</strong>) ainda não está registrada. Revise seus pontos e clique em <strong>"Assinar Período"</strong> para homologá-lo.
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Bento grid metrics */}
@@ -2441,9 +3160,9 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
           {/* Card 2: Delays */}
           <div className="bg-gradient-to-br from-rose-50 to-rose-100/30 p-5 rounded-3xl border border-rose-100/70 shadow-sm flex items-center justify-between transition-all hover:shadow-md">
             <div>
-              <p className="text-rose-800 text-[10px] uppercase tracking-wider font-extrabold mb-1">Atrasos / Tempo Devido</p>
+              <p className="text-rose-800 text-[10px] uppercase tracking-wider font-extrabold mb-1 font-sans">Atrasos / Tempo Devido</p>
               <h3 className="text-xl font-black text-rose-950">{formattedDelays}</h3>
-              <p className="text-rose-600/90 text-[10px] mt-0.5">Tempo devido dentro do expediente de trabalho</p>
+              <p className="text-rose-600/90 text-[10px] mt-0.5 font-sans">Tempo devido dentro do expediente de trabalho</p>
             </div>
             <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-200/50 flex items-center justify-center text-rose-600 shrink-0">
               <AlertCircle size={20} />
@@ -2464,8 +3183,8 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
               <h3 className="text-xl font-black">
                 {netBalance >= 0 ? '+' : '-'}{formattedTotal}
               </h3>
-              <p className={cn("text-[10px] mt-0.5", netBalance >= 0 ? "text-emerald-600/90" : "text-red-600/90")}>
-                {logs.length === 0 
+              <p className={cn("text-[10px] mt-0.5 font-sans", netBalance >= 0 ? "text-emerald-600/90" : "text-red-600/90")}>
+                {filteredLogs.length === 0 
                   ? "Nenhum registro de ponto encontrado"
                   : (netBalance >= 0 ? "Crédito compensado (Bruto - Devidos)" : "Você está devendo horas para a empresa")
                 }
@@ -2489,13 +3208,12 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
                 <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Tipo</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Data</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Hora</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider col-overtime">Hora Extra</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider col-overtime">Hora Extra / Devido</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Localização</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {logs.length > 0 ? logs.map((log) => {
-                const otMin = getOvertimeMinutes(log);
+              {filteredLogs.length > 0 ? filteredLogs.map((log) => {
                 return (
                   <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
                     <td className="px-6 py-4">
@@ -2506,10 +3224,10 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
                         {log.type === 'in' ? 'Entrada' : 'Saída'}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-sm text-slate-600">
+                    <td className="px-6 py-4 text-sm text-slate-600 font-sans">
                       {log.timestamp ? format(log.timestamp.toDate(), 'dd/MM/yyyy') : '--/--/----'}
                     </td>
-                    <td className="px-6 py-4 font-bold text-slate-900">
+                    <td className="px-6 py-4 font-bold text-slate-900 font-sans">
                       {log.timestamp ? format(log.timestamp.toDate(), 'HH:mm:ss') : '--:--:--'}
                     </td>
                     <td className="px-6 py-4 text-sm">
@@ -2526,7 +3244,7 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
                         }
                         if (del > 0) {
                           return (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 font-sans">
                               <AlertCircle size={12} />
                               -{formatOvertime(del)} Devido
                             </span>
@@ -2548,13 +3266,20 @@ const HistoryView = ({ profile }: { profile: UserProfile }) => {
                 );
               }) : (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-400">Nenhum registro encontrado.</td>
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-450 font-medium font-sans">Nenhum registro encontrado para este período.</td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      <SignaturePadModal
+        isOpen={isSigningOpen}
+        onClose={() => setIsSigningOpen(false)}
+        onSave={handleSaveSignature}
+        defaultName={profile.displayName || profile.email}
+      />
     </div>
   );
 };

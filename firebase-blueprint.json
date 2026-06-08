@@ -95,6 +95,24 @@
         }
       },
       "required": ["checkoutReminders", "standardWorkHours"]
+    },
+    "Signature": {
+      "title": "Signature",
+      "description": "Virtual signature recorded for a user and period.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "signedAt": { "type": "string", "format": "date-time" },
+        "signatureImage": { "type": "string", "description": "Base64 signature image or styling." },
+        "signedByName": { "type": "string" },
+        "signedByRole": { "type": "string" },
+        "hash": { "type": "string" }
+      },
+      "required": ["companyId", "userId", "startDate", "endDate", "signatureImage", "signedByName"]
     }
   },
   "firestore": {
@@ -121,6 +139,10 @@
     "/companySettings/{companyId}": {
       "schema": "CompanySettings",
       "description": "Global settings for the company."
+    },
+    "/signatures/{signatureId}": {
+      "schema": "Signature",
+      "description": "Virtual signatures for period validation."
     }
   }
 }

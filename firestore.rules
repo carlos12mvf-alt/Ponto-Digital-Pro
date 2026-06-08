@@ -207,5 +207,10 @@ service cloud.firestore {
         userHasCompany(companyId)
       ) && isValidCompanySettings(request.resource.data);
     }
+
+    match /signatures/{signatureId} {
+      allow read, create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
   }
 }

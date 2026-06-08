@@ -91,3 +91,17 @@ export interface FirestoreErrorInfo {
     }[];
   }
 }
+
+export interface Signature {
+  id?: string;
+  companyId: string;
+  userId: string;
+  userName: string;
+  startDate: string;
+  endDate: string;
+  signedAt: any;
+  signatureImage: string;
+  signedByName: string;
+  signedByRole: string;
+  hash: string;
+}
